@@ -61,6 +61,20 @@ def test_calibration_separates_confident_from_uncertain_accuracy():
     assert result.uncertain_accuracy == 0.5
 
 
+def test_ungroupable_members_never_count_as_correct():
+    # The cascade lumps two unrelated one-offs into a single cluster group.
+    # Both are genuinely ungroupable, so this grouping is false and must not
+    # be rewarded as correct — even though every member "agrees" with the
+    # group's own (sentinel) majority label.
+    predicted = {"a": "cluster:t1", "b": "cluster:t1"}
+    truth = {"a": UNGROUPABLE, "b": UNGROUPABLE}
+    tiers = {"a": "uncertain", "b": "uncertain"}
+
+    result = score(predicted, truth, tiers)
+
+    assert result.precision == 0.0
+
+
 def test_empty_input_returns_zeros_without_dividing_by_zero():
     result = score({}, {}, {})
     assert result.precision == 0.0

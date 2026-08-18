@@ -59,7 +59,7 @@ def score(
     correct = {
         tx_hash
         for tx_hash, label in grouped.items()
-        if truth[tx_hash] == majority[label]
+        if truth[tx_hash] != UNGROUPABLE and truth[tx_hash] == majority[label]
     }
 
     groupable = {h for h, t in truth.items() if t != UNGROUPABLE}
