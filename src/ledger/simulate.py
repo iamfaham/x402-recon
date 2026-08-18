@@ -92,6 +92,15 @@ def generate_batch(count: int = 120, seed: int = 42) -> SimulatedBatch:
             clock += timedelta(seconds=rng.randint(5, 120))
             add(sender, "data-feed", suffix_group, clock)
 
+    # An agent that rotates its sender address on every transaction but keeps
+    # one consistent, specific memo (a fresh wallet per payment, tagged with
+    # the same service identifier). Each sender appears exactly once, so
+    # sender_match cannot fire; the shared specific memo is what makes these
+    # groupable, which is exactly what memo_match exists to catch.
+    for _ in range(6):
+        clock += timedelta(seconds=rng.randint(10, 400))
+        add(_address(rng), "invoice-settlement", "agent-rotating", clock)
+
     # One-off senders that belong to no group. Some land inside a tight burst,
     # so time-clustering has something plausible but wrong to latch onto.
     while len(transactions) < count:

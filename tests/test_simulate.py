@@ -80,6 +80,28 @@ def test_contains_near_miss_addresses_that_differ():
     assert any(c > 1 for c in prefixes.values())
 
 
+def test_contains_a_specific_memo_shared_by_distinct_senders():
+    """Rule 2 (memo_match) needs a memo that repeats across different senders,
+    not just repeat senders. Otherwise sender_match always wins first and
+    memo_match is structurally unreachable."""
+    batch = generate_batch(count=120, seed=1)
+    generic = {"", "payment", "x402", "n/a", "-", "none", "tx", "transfer"}
+
+    memo_to_senders: dict[str, set[str]] = {}
+    for t in batch.transactions:
+        if t.memo is None:
+            continue
+        memo = t.memo.strip()
+        if memo.lower() in generic:
+            continue
+        memo_to_senders.setdefault(memo, set()).add(t.sender_address)
+
+    assert any(
+        len(senders) >= 5
+        for senders in memo_to_senders.values()
+    ), "expected a specific memo shared by at least 5 distinct senders"
+
+
 def test_write_batch_writes_both_files(tmp_path: Path):
     batch = generate_batch(count=120, seed=1)
     tx_path, gt_path = write_batch(batch, tmp_path)
