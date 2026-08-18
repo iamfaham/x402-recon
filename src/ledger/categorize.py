@@ -10,10 +10,13 @@ stays explicitly uncategorized — the product's worst failure is false
 confidence, not low coverage.
 """
 
+import sqlite3
 from collections import Counter
+from datetime import UTC, datetime, timedelta
 
-from ledger.config import CascadeConfig
-from ledger.models import Transaction
+from ledger.config import DEFAULT_CONFIG, CascadeConfig
+from ledger.db import load_transactions
+from ledger.models import Categorization, Transaction
 
 CONFIDENT = "confident"
 UNCERTAIN = "uncertain"
@@ -42,3 +45,115 @@ def build_memo_counts(txns: list[Transaction], config: CascadeConfig) -> Counter
     return Counter(
         t.memo.strip() for t in txns if not is_generic_memo(t.memo, config)
     )
+
+
+_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def _parse(timestamp: str) -> datetime:
+    return datetime.strptime(timestamp, _TIMESTAMP_FORMAT).replace(tzinfo=UTC)
+
+
+def find_time_clusters(
+    txns: list[Transaction], config: CascadeConfig
+) -> dict[str, str]:
+    """Group transactions into bursts of activity.
+
+    Returns tx_hash -> cluster label, containing only transactions that share a
+    burst with at least one other transaction. A lone transaction is not a
+    cluster: proximity to nothing is not evidence of anything.
+    """
+    if not txns:
+        return {}
+
+    window = timedelta(minutes=config.time_window_minutes)
+    ordered = sorted(txns, key=lambda t: t.timestamp)
+
+    clusters: dict[str, str] = {}
+    current: list[Transaction] = [ordered[0]]
+
+    def flush(group: list[Transaction]) -> None:
+        if len(group) < 2:
+            return
+        label = f"cluster:{group[0].timestamp}"
+        for member in group:
+            clusters[member.tx_hash] = label
+
+    for previous, transaction in zip(ordered, ordered[1:]):
+        if _parse(transaction.timestamp) - _parse(previous.timestamp) <= window:
+            current.append(transaction)
+        else:
+            flush(current)
+            current = [transaction]
+    flush(current)
+
+    return clusters
+
+
+def categorize_transactions(
+    txns: list[Transaction],
+    config: CascadeConfig = DEFAULT_CONFIG,
+    now: str | None = None,
+) -> list[Categorization]:
+    """Run the cascade over every transaction, in rule order."""
+    categorized_at = now or datetime.now(UTC).strftime(_TIMESTAMP_FORMAT)
+
+    sender_counts = build_sender_counts(txns)
+    memo_counts = build_memo_counts(txns, config)
+    clusters = find_time_clusters(txns, config)
+
+    results: list[Categorization] = []
+    for transaction in txns:
+        label, tier, rule = UNCATEGORIZED, UNCERTAIN, RULE_NONE
+
+        memo = None if transaction.memo is None else transaction.memo.strip()
+
+        if sender_counts[transaction.sender_address] >= config.min_occurrences:
+            label = f"agent:{transaction.sender_address}"
+            tier, rule = CONFIDENT, RULE_SENDER_MATCH
+        elif (
+            not is_generic_memo(transaction.memo, config)
+            and memo is not None
+            and memo_counts[memo] >= config.min_occurrences
+        ):
+            label = f"service:{memo}"
+            tier, rule = CONFIDENT, RULE_MEMO_MATCH
+        elif transaction.tx_hash in clusters:
+            label = clusters[transaction.tx_hash]
+            tier, rule = UNCERTAIN, RULE_TIME_CLUSTER
+
+        results.append(
+            Categorization(
+                transaction_id=transaction.id,
+                category_label=label,
+                confidence_tier=tier,
+                rule_matched=rule,
+                categorized_at=categorized_at,
+            )
+        )
+
+    return results
+
+
+def run_categorize(
+    conn: sqlite3.Connection, config: CascadeConfig = DEFAULT_CONFIG
+) -> int:
+    """Categorize every stored transaction, replacing any previous verdict.
+
+    Idempotent by design so the cascade can be tuned and re-run freely without
+    corrupting state or double-counting.
+    """
+    txns = load_transactions(conn)
+    categorizations = categorize_transactions(txns, config)
+
+    conn.executemany(
+        """INSERT OR REPLACE INTO categorizations
+           (transaction_id, category_label, confidence_tier, rule_matched, categorized_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        [
+            (c.transaction_id, c.category_label, c.confidence_tier, c.rule_matched, c.categorized_at)
+            for c in categorizations
+        ],
+    )
+    conn.commit()
+    return len(categorizations)
