@@ -9,9 +9,9 @@ confidently identified and what still needs review.
 Ledger only reads and summarizes payments a business has already received. It
 never holds or moves funds, and it does not provide tax or accounting advice.
 
-## Status: v0
+## Status: v0.1a
 
-v0 runs on simulated data. Real transaction data (Base Sepolia testnet, or a
+v0.1a runs on simulated data. Real transaction data (Base Sepolia testnet, or a
 public x402 dataset) is the next milestone — it plugs into the ingest stage
 without changing anything downstream.
 
@@ -41,13 +41,13 @@ Transactions pass through ordered rules; the first to fire wins and records why.
 Repetition is evidence, so rules 1 and 2 claim confidence. Proximity in time is
 a guess, so rule 3 does not. Nothing is ever forced into a bucket.
 
-## Measured accuracy (seed 42, 120 transactions)
+## Measured accuracy (seed 42, 145 transactions)
 
 | Metric | Value |
 |---|---|
-| Precision (B-cubed) | 96.5% |
-| Recall (B-cubed) | 100.0% |
-| Confident tier precision | 96.7% |
+| Precision (B-cubed) | 96.6% |
+| Recall (B-cubed) | 92.9% |
+| Confident tier precision | 95.9% |
 | Declined coverage | 100.0% |
 
 **These numbers are not comparable to v0's.** v0 reported precision 79.8% and
@@ -57,13 +57,25 @@ penalizes both errors, and measures against a dataset built to catch the rules
 being wrong. A different number here reflects a different question being asked,
 not a regression or an improvement.
 
+Recall is below 100% here because the dataset now contains genuine
+fragmentation: an agent that rotates its address mid-life is split by
+`sender_match` into two predicted groups, and B-cubed recall correctly
+penalizes that split. Full detail, including the `memo_match` finding below
+and the `time_cluster` verdict's seed-to-seed variance, is in
+[`docs/sample-report.md`](docs/sample-report.md).
+
 Precision asks: of the payments grouped together, how many belonged together.
 Recall asks: of the payments from one payer, how many were found. Declined
 coverage asks what was given up by leaving payments uncategorized - without it,
 a tool could score perfect calibration by categorizing almost nothing.
 
-Calibration is the metric that matters most: if the confident tier is no more
-accurate than the uncertain tier, the confidence signal is meaningless.
+Calibration is the metric that matters most, and it is defined in absolute
+terms: the confident tier's B-cubed precision must clear a pre-registered
+threshold (0.95) on its own, not merely beat the uncertain tier. On this run
+it does (95.9%) — but only in aggregate. `memo_match` alone, one of the two
+rules the cascade marks confident, measures 70.6% precision on 17 payments;
+the blended figure clears the gate only because `sender_match`'s 106 easy
+cases dilute it. See `docs/sample-report.md` for the full per-rule breakdown.
 
 ## Ground truth format
 

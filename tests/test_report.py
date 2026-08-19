@@ -307,6 +307,32 @@ def test_net_can_go_negative_and_renders_with_leading_sign(tmp_path: Path):
     assert "-$1.50" in render_summary(data)
 
 
+def test_line_with_one_payment_and_one_refund_does_not_read_as_two_payments(
+    tmp_path: Path,
+):
+    # I5: a payer with one payment and one refund must not be reported as
+    # "(2 payments)" - that overstates how many payments actually happened.
+    conn = connect(tmp_path / "m.db")
+    init_schema(conn)
+    seed_with_types(
+        conn,
+        [
+            ("0x1", "0xa", None, "2026-08-10T10:00:00Z", 1_000_000, "payment"),
+            ("0x2", "0xa", None, "2026-08-11T10:00:00Z", 1_000_000, TX_TYPE_REFUND),
+        ],
+    )
+    run_categorize(conn)
+
+    data = build_report(conn, "2026-08-01", "2026-08-31")
+    line = next(line for line in data.lines if line.category_label == "agent:0xa")
+    assert line.payment_count == 1
+    assert line.refund_count == 1
+
+    summary = render_summary(data)
+    assert "(2 payments)" not in summary
+    assert "(1 payment, 1 refund)" in summary
+
+
 def test_money_reconciles_with_refunds(tmp_path: Path):
     conn = refunded_db(tmp_path)
     out = tmp_path / "r.csv"

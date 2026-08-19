@@ -2,6 +2,7 @@ import pytest
 
 from ledger.evaluate import (
     CALIBRATION_THRESHOLD,
+    MIN_VERDICT_SAMPLE,
     TIME_CLUSTER_THRESHOLD,
     render_evaluation,
     score,
@@ -219,15 +220,47 @@ def test_render_is_silent_above_the_calibration_threshold():
     assert "WARNING" not in text
 
 
+def _sample_ids(n):
+    return [f"t{i}" for i in range(n)]
+
+
 def test_render_prints_a_computed_time_cluster_verdict():
+    # Needs >= MIN_VERDICT_SAMPLE (20) firings for a verdict to be recorded
+    # at all (C2a) - four transactions is a coin-flip sample and would now
+    # print INSUFFICIENT DATA rather than FAILS.
+    ids = _sample_ids(MIN_VERDICT_SAMPLE)
+    predicted = {i: "g1" for i in ids}
+    # Half land in true group X (correct), half in true group Y (wrong) -
+    # each predicted-group member's precision is 0.5, well under threshold.
+    truth = {i: ("X" if idx % 2 == 0 else "Y") for idx, i in enumerate(ids)}
+    result = build(predicted, truth, rules=dict.fromkeys(ids, RULE_TIME_CLUSTER))
+    text = render_evaluation(result)
+    assert "FAILS" in text
+    assert "0.70" in text
+    assert f"{MIN_VERDICT_SAMPLE} payments" in text
+
+
+def test_render_withholds_verdict_below_the_minimum_sample():
     result = build(
         {"a": "g1", "b": "g1", "c": "g1", "d": "g1"},
         {"a": "X", "b": "X", "c": "Y", "d": "Z"},
         rules=dict.fromkeys("abcd", RULE_TIME_CLUSTER),
     )
     text = render_evaluation(result)
-    assert "FAILS" in text
-    assert "0.70" in text
+    assert "INSUFFICIENT DATA" in text
+    assert "PASSES" not in text
+    assert "FAILS" not in text
+    assert f"need {MIN_VERDICT_SAMPLE}" in text
+
+
+def test_render_prints_verdict_at_exactly_the_minimum_sample():
+    ids = _sample_ids(MIN_VERDICT_SAMPLE)
+    predicted = {i: "g1" for i in ids}
+    truth = {i: "X" for i in ids}  # perfect precision, clears threshold
+    result = build(predicted, truth, rules=dict.fromkeys(ids, RULE_TIME_CLUSTER))
+    text = render_evaluation(result)
+    assert "PASSES" in text
+    assert "INSUFFICIENT DATA" not in text
 
 
 def test_render_shows_per_rule_breakdown():
@@ -242,3 +275,18 @@ def test_render_shows_per_rule_breakdown():
 def test_render_omits_hazard_split_when_unavailable():
     text = render_evaluation(build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"}))
     assert "hazard" not in text.lower()
+
+
+def test_render_shows_n_a_not_zero_percent_for_an_empty_hazard_half():
+    # I3: a 0.0% next to a zero count reads as "failed every case" when it
+    # actually means "never tried" - neither fragile nor unearned.
+    result = build(
+        {"a": "g1", "b": "g1"},
+        {"a": "X", "b": "X"},
+        rules=dict.fromkeys("ab", RULE_SENDER_MATCH),
+        hazards={"a": "some_hazard", "b": "some_hazard"},  # both hazard, none ordinary
+    )
+    text = render_evaluation(result)
+    assert "ordinary" in text.lower()
+    assert "n/a" in text
+    assert "0.0%  (0)" not in text

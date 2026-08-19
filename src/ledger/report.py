@@ -27,6 +27,11 @@ def _payments(count: int) -> str:
     """Pluralize the payment count so a lone entry reads as "1 payment"."""
     return "payment" if count == 1 else "payments"
 
+
+def _refunds(count: int) -> str:
+    """Pluralize the refund count so a lone entry reads as "1 refund"."""
+    return "refund" if count == 1 else "refunds"
+
 _SELECT_IN_RANGE = f"""
 SELECT t.tx_hash, t.timestamp, t.sender_address, t.memo, t.amount_micro_usdc,
        t.tx_type,
@@ -59,6 +64,8 @@ class CategoryLine:
     confidence_tier: str
     rule_matched: str
     transaction_count: int
+    payment_count: int
+    refund_count: int
     gross_micro_usdc: int
     refunded_micro_usdc: int
     net_micro_usdc: int
@@ -72,6 +79,8 @@ class ReportData:
     end: str
     lines: list[CategoryLine]
     transaction_count: int
+    payment_count: int
+    refund_count: int
     gross_micro_usdc: int
     refunded_micro_usdc: int
     net_micro_usdc: int
@@ -94,6 +103,8 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
             confidence_tier=tier,
             rule_matched=rule,
             transaction_count=len(members),
+            payment_count=sum(1 for r in members if r["tx_type"] == TX_TYPE_PAYMENT),
+            refund_count=sum(1 for r in members if r["tx_type"] == TX_TYPE_REFUND),
             gross_micro_usdc=sum(
                 r["amount_micro_usdc"] for r in members
                 if r["tx_type"] == TX_TYPE_PAYMENT
@@ -120,12 +131,16 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
     refunded = sum(r["amount_micro_usdc"] for r in rows if r["tx_type"] == TX_TYPE_REFUND)
     confident = sum(_signed(r) for r in rows if r["confidence_tier"] == CONFIDENT)
     net = gross - refunded
+    payment_count = sum(1 for r in rows if r["tx_type"] == TX_TYPE_PAYMENT)
+    refund_count = sum(1 for r in rows if r["tx_type"] == TX_TYPE_REFUND)
 
     return ReportData(
         start=start,
         end=end,
         lines=lines,
         transaction_count=len(rows),
+        payment_count=payment_count,
+        refund_count=refund_count,
         gross_micro_usdc=gross,
         refunded_micro_usdc=refunded,
         net_micro_usdc=net,
@@ -150,8 +165,9 @@ def render_summary(data: ReportData) -> str:
         "=" * len(header),
         "",
         f"Payments received:  {format_usdc(data.gross_micro_usdc)}"
-        f"  ({data.transaction_count} {_payments(data.transaction_count)})",
-        f"Refunds issued:     {format_usdc(data.refunded_micro_usdc)}",
+        f"  ({data.payment_count} {_payments(data.payment_count)})",
+        f"Refunds issued:     {format_usdc(data.refunded_micro_usdc)}"
+        f"  ({data.refund_count} {_refunds(data.refund_count)})",
         f"Net received:       {format_usdc(data.net_micro_usdc)}",
         "",
         f"  Confidently identified: {format_usdc(data.confident_micro_usdc)}",
@@ -168,9 +184,15 @@ def render_summary(data: ReportData) -> str:
             else line.category_label
         )
         marker = "" if line.confidence_tier == CONFIDENT else "   [needs review]"
+        # Payment count is reported against gross, refund count against
+        # refunds - a line with one payment and one refund never reads as
+        # "2 payments" when in fact it was one payment that came back.
+        counts = f"{line.payment_count} {_payments(line.payment_count)}"
+        if line.refund_count:
+            counts += f", {line.refund_count} {_refunds(line.refund_count)}"
         lines.append(
             f"  {name:<48} {format_usdc(line.net_micro_usdc):>16}"
-            f"  ({line.transaction_count} {_payments(line.transaction_count)}){marker}"
+            f"  ({counts}){marker}"
         )
 
     lines += [

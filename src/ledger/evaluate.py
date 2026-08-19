@@ -36,6 +36,13 @@ from ledger.models import (
 TIME_CLUSTER_THRESHOLD = 0.70
 CALIBRATION_THRESHOLD = 0.95
 
+# A verdict needs evidence. Below this many scored transactions the rule's
+# precision is a coin-flip artifact, so the criterion withholds judgment
+# rather than asserting one. This gate can only ever WITHHOLD a verdict,
+# never manufacture a favourable one - the 0.70 threshold above is
+# untouched and stays exactly as pre-registered.
+MIN_VERDICT_SAMPLE = 20
+
 
 @dataclass(frozen=True)
 class RuleMetrics:
@@ -227,22 +234,44 @@ def render_evaluation(result: EvaluationResult) -> str:
             f"   recall {metrics.recall:6.1%}   ({metrics.count} payments)"
         )
         if result.hazards_available and metrics.count:
+            hazard_str = (
+                f"{metrics.hazard_precision:6.1%}"
+                if metrics.hazard_count
+                else f"{'n/a':>6}"
+            )
+            ordinary_str = (
+                f"{metrics.ordinary_precision:6.1%}"
+                if metrics.ordinary_count
+                else f"{'n/a':>6}"
+            )
             lines.append(
-                f"    {'hazard cases':<16} {metrics.hazard_precision:6.1%}"
+                f"    {'hazard cases':<16} {hazard_str}"
                 f"  ({metrics.hazard_count})"
-                f"    {'ordinary':<10} {metrics.ordinary_precision:6.1%}"
+                f"    {'ordinary':<10} {ordinary_str}"
                 f"  ({metrics.ordinary_count})"
             )
 
     verdict = time_cluster_verdict(result)
     if verdict is not None:
         precision, passes = verdict
-        outcome = "PASSES" if passes else "FAILS"
-        lines += [
-            "",
-            f"Pre-registered criterion: time_cluster B-cubed precision "
-            f"{precision:.1%} - {outcome} threshold "
-            f"{TIME_CLUSTER_THRESHOLD:.2f}",
-        ]
+        count = next(
+            (m.count for m in result.per_rule if m.rule == RULE_TIME_CLUSTER), 0
+        )
+        if count < MIN_VERDICT_SAMPLE:
+            lines += [
+                "",
+                f"Pre-registered criterion: time_cluster B-cubed precision "
+                f"{precision:.1%} on {count} payments - "
+                f"INSUFFICIENT DATA (need {MIN_VERDICT_SAMPLE}) - "
+                "no verdict recorded",
+            ]
+        else:
+            outcome = "PASSES" if passes else "FAILS"
+            lines += [
+                "",
+                f"Pre-registered criterion: time_cluster B-cubed precision "
+                f"{precision:.1%} on {count} payments - {outcome} threshold "
+                f"{TIME_CLUSTER_THRESHOLD:.2f}",
+            ]
 
     return "\n".join(lines)

@@ -150,6 +150,33 @@ def test_an_agent_rotates_its_address_mid_life():
     assert len({t.sender_address for t in tagged}) >= 2
 
 
+def test_rotating_address_hazard_actually_fragments_the_cascade():
+    # THE PROPERTY THAT MATTERS (C1a): >=2 distinct senders is necessary but
+    # not sufficient — each address must repeat at least twice for
+    # sender_match to fire and actually split this one payer into more than
+    # one predicted group. Run the real cascade and assert the split happens.
+    from ledger.categorize import categorize_transactions
+
+    batch = generate_batch(count=120, seed=1)
+    tagged = [
+        t for t in batch.transactions
+        if batch.hazards.get(t.tx_hash) == HAZARD_ROTATING_ADDRESS
+    ]
+    assert len({batch.ground_truth[t.tx_hash] for t in tagged}) == 1
+
+    import dataclasses
+
+    numbered = [dataclasses.replace(t, id=i) for i, t in enumerate(batch.transactions)]
+    cats = categorize_transactions(numbered)
+    by_hash = {t.tx_hash: c for t, c in zip(numbered, cats)}
+
+    labels = {by_hash[t.tx_hash].category_label for t in tagged}
+    assert len(labels) > 1, (
+        "rotating-address hazard did not fragment the payer across predicted "
+        "groups - sender_match never actually split it"
+    )
+
+
 def test_an_agents_memo_drifts_over_its_life():
     batch = generate_batch(count=120, seed=1)
     tagged = [
@@ -159,6 +186,34 @@ def test_an_agents_memo_drifts_over_its_life():
     assert len(tagged) >= 2
     assert len({batch.ground_truth[t.tx_hash] for t in tagged}) == 1
     assert len({t.memo for t in tagged}) >= 2
+
+
+def test_memo_drift_is_seen_by_memo_match_not_intercepted_by_sender_match():
+    # C1b: the drift agent's address must never repeat, so sender_match
+    # cannot claim these transactions before memo_match gets a chance.
+    batch = generate_batch(count=120, seed=1)
+    tagged = [
+        t for t in batch.transactions
+        if batch.hazards.get(t.tx_hash) == HAZARD_MEMO_DRIFT
+    ]
+    senders = Counter(t.sender_address for t in tagged)
+    assert all(c == 1 for c in senders.values()), (
+        "a memo-drift sender address repeats, so sender_match could "
+        "intercept these transactions before memo_match ever sees them"
+    )
+
+    from ledger.categorize import categorize_transactions
+    from ledger.models import RULE_MEMO_MATCH, RULE_NONE, RULE_SENDER_MATCH
+
+    import dataclasses
+
+    numbered = [dataclasses.replace(t, id=i) for i, t in enumerate(batch.transactions)]
+    cats = categorize_transactions(numbered)
+    by_hash = {t.tx_hash: c for t, c in zip(numbered, cats)}
+
+    rules_seen = {by_hash[t.tx_hash].rule_matched for t in tagged}
+    assert RULE_SENDER_MATCH not in rules_seen
+    assert rules_seen <= {RULE_MEMO_MATCH, RULE_NONE}
 
 
 def test_refunds_are_generated_against_real_payments():
@@ -197,7 +252,25 @@ def test_write_batch_writes_all_three_files(tmp_path: Path):
     assert tx_path.exists() and gt_path.exists() and hz_path.exists()
     txs = json.loads(tx_path.read_text())
     assert len(txs) == len(batch.transactions)
-    assert txs[0]["tx_hash"] == batch.transactions[0].tx_hash
+    # NOTE: written row order is by tx_hash (C1c), not the in-memory
+    # timestamp order of batch.transactions - look the row up by hash rather
+    # than assuming position 0 lines up.
+    written_by_hash = {row["tx_hash"] for row in txs}
+    assert batch.transactions[0].tx_hash in written_by_hash
     assert "tx_type" in txs[0]
     assert json.loads(gt_path.read_text())[batch.transactions[0].tx_hash]
     assert json.loads(hz_path.read_text()) == batch.hazards
+
+
+def test_written_transactions_are_not_in_timestamp_order(tmp_path: Path):
+    # C1c: written JSON rows are ordered by tx_hash (a deterministic
+    # shuffle), NOT by timestamp - so no downstream stage can wrongly rely
+    # on arrival order. batch.transactions itself stays timestamp-sorted
+    # (see test_output_is_sorted_by_timestamp); only the written file differs.
+    batch = generate_batch(count=120, seed=1)
+    tx_path, _, _ = write_batch(batch, tmp_path)
+    written = json.loads(tx_path.read_text())
+    timestamps = [row["timestamp"] for row in written]
+    assert timestamps != sorted(timestamps)
+    tx_hashes = [row["tx_hash"] for row in written]
+    assert tx_hashes == sorted(tx_hashes)

@@ -176,26 +176,38 @@ def generate_batch(
     for group in ("agent-nearmiss-a", "agent-nearmiss-b"):
         b.burst(_address(rng, prefix=shared_prefix), "data-feed", group, rng.randint(3, 6))
 
-    # HAZARD: an agent rotating its address every payment. sender_match cannot
-    # fire (each sender appears once) and will split this payer if it tries.
-    for _ in range(hazards.rotating_address_payments):
-        b.emit(
-            _address(rng),
-            "invoice-settlement",
-            "agent-rotating",
-            _somewhere_in_window(rng),
-            hazard=HAZARD_ROTATING_ADDRESS,
-        )
+    # HAZARD: an agent rotating its address mid-life. It uses address A for
+    # several payments, then switches to address B for several more. Each
+    # address appears at least twice so sender_match fires on both halves and
+    # splits this one true payer into two predicted groups — manufacturing
+    # genuine fragmentation for B-cubed recall to catch. Ground truth stays
+    # one group for all of them.
+    _rotating_total = hazards.rotating_address_payments
+    _rotating_first_half = max(2, _rotating_total // 2)
+    _rotating_second_half = max(2, _rotating_total - _rotating_first_half)
+    address_a = _address(rng)
+    address_b = _address(rng)
+    for address, count in ((address_a, _rotating_first_half), (address_b, _rotating_second_half)):
+        for _ in range(count):
+            b.emit(
+                address,
+                "invoice-settlement",
+                "agent-rotating",
+                _somewhere_in_window(rng),
+                hazard=HAZARD_ROTATING_ADDRESS,
+            )
 
-    # HAZARD: memo drift. One payer, one address, a memo that changes.
+    # HAZARD: memo drift. One payer, but its address rotates so no address
+    # ever repeats — the opposite of the rotating-address hazard above — so
+    # sender_match cannot intercept these before memo_match sees them. The
+    # memo changes across versions while ground truth stays one group.
     for i in range(hazards.memo_drift_agents):
-        sender = _address(rng)
         group = f"agent-drift-{i}"
         for version, memo in enumerate(("report-api", "report-api-v2", "reports")):
             moment = _somewhere_in_window(rng)
             for _ in range(rng.randint(2, 4)):
                 moment += timedelta(seconds=rng.randint(5, 120))
-                b.emit(sender, memo, group, moment, hazard=HAZARD_MEMO_DRIFT)
+                b.emit(_address(rng), memo, group, moment, hazard=HAZARD_MEMO_DRIFT)
 
     # HAZARD: strangers sharing one specific memo. memo_match will collapse
     # them; ground truth says they are different payers.
@@ -221,7 +233,14 @@ def generate_batch(
         )
 
     # HAZARD: refunds against real earlier payments, same payer and group.
-    refundable = [e for e in b.events if e.true_group != UNGROUPABLE]
+    # Memo-drift transactions are excluded: a refund reuses its original's
+    # sender address, and doing that for a memo-drift payment would make that
+    # one address repeat - letting sender_match intercept it and defeating
+    # the whole point of the memo-drift hazard (C1b).
+    refundable = [
+        e for e in b.events
+        if e.true_group != UNGROUPABLE and e.hazard != HAZARD_MEMO_DRIFT
+    ]
     for original in rng.sample(refundable, min(hazards.refund_count, len(refundable))):
         b.emit(
             original.transaction.sender_address,
@@ -267,6 +286,13 @@ def write_batch(batch: SimulatedBatch, out_dir: Path) -> tuple[Path, Path, Path]
     gt_path = out_dir / "ground_truth.json"
     hz_path = out_dir / "hazards.json"
 
+    # Written ordered by tx_hash, not timestamp. tx_hash is random and
+    # uncorrelated with time, so the JSON on disk is deliberately NOT in
+    # arrival order — a deterministic shuffle that catches any downstream
+    # stage that wrongly assumes input order. `batch.transactions` (the
+    # canonical in-memory view) stays timestamp-sorted; only the written
+    # file's row order differs.
+    shuffled = sorted(batch.transactions, key=lambda t: t.tx_hash)
     tx_path.write_text(
         json.dumps(
             [
@@ -281,7 +307,7 @@ def write_batch(batch: SimulatedBatch, out_dir: Path) -> tuple[Path, Path, Path]
                     "raw_payload": t.raw_payload,
                     "tx_type": t.tx_type,
                 }
-                for t in batch.transactions
+                for t in shuffled
             ],
             indent=2,
         )
