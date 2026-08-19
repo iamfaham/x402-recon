@@ -1,7 +1,9 @@
 from pathlib import Path
 
-from ledger.db import connect, init_schema, load_transactions
-from ledger.models import Transaction
+import pytest
+
+from ledger.db import SCHEMA_VERSION, SchemaVersionError, connect, init_schema, load_transactions
+from ledger.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND, Transaction
 
 
 def make_tx(tx_hash: str = "0xabc", **overrides) -> Transaction:
@@ -86,3 +88,68 @@ def test_load_transactions_returns_empty_list_when_no_data(tmp_path: Path):
     conn = connect(tmp_path / "test.db")
     init_schema(conn)
     assert load_transactions(conn) == []
+
+
+def test_schema_creates_version_and_hazards_tables(tmp_path: Path):
+    conn = connect(tmp_path / "t.db")
+    init_schema(conn)
+    names = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert {"schema_version", "hazards"} <= names
+
+
+def test_schema_version_is_recorded_once(tmp_path: Path):
+    conn = connect(tmp_path / "t.db")
+    init_schema(conn)
+    init_schema(conn)
+    rows = conn.execute("SELECT version FROM schema_version").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["version"] == SCHEMA_VERSION
+
+
+def test_stale_database_without_version_table_is_refused(tmp_path: Path):
+    conn = connect(tmp_path / "old.db")
+    # Simulate a v0 database: transactions exist, schema_version does not.
+    conn.execute("CREATE TABLE transactions (id INTEGER PRIMARY KEY)")
+    conn.commit()
+
+    with pytest.raises(SchemaVersionError) as exc:
+        init_schema(conn)
+    assert "out of date" in str(exc.value).lower()
+
+
+def test_wrong_schema_version_is_refused(tmp_path: Path):
+    conn = connect(tmp_path / "t.db")
+    init_schema(conn)
+    conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION + 1,))
+    conn.commit()
+
+    with pytest.raises(SchemaVersionError):
+        init_schema(conn)
+
+
+def test_tx_type_defaults_to_payment_and_round_trips(tmp_path: Path):
+    conn = connect(tmp_path / "t.db")
+    init_schema(conn)
+    conn.execute(
+        """INSERT INTO transactions
+           (tx_hash, sender_address, receiver_address, amount_micro_usdc,
+            timestamp, memo, chain, raw_payload)
+           VALUES ('0xa', 's', 'r', 10, '2026-08-18T10:00:00Z', NULL, 'sim', '{}')"""
+    )
+    conn.execute(
+        """INSERT INTO transactions
+           (tx_hash, sender_address, receiver_address, amount_micro_usdc,
+            timestamp, memo, chain, raw_payload, tx_type)
+           VALUES ('0xb', 's', 'r', 4, '2026-08-18T11:00:00Z', NULL, 'sim', '{}', ?)""",
+        (TX_TYPE_REFUND,),
+    )
+    conn.commit()
+
+    loaded = {t.tx_hash: t for t in load_transactions(conn)}
+    assert loaded["0xa"].tx_type == TX_TYPE_PAYMENT
+    assert loaded["0xb"].tx_type == TX_TYPE_REFUND

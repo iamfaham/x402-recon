@@ -48,6 +48,7 @@ class Transaction:
     memo: str | None
     chain: str
     raw_payload: str
+    tx_type: str = TX_TYPE_PAYMENT
     id: int | None = None
 
 
