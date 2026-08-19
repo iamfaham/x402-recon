@@ -1,8 +1,12 @@
 import csv
+import json
+from decimal import Decimal
 from pathlib import Path
 
 from ledger.categorize import run_categorize
-from ledger.db import connect, init_schema
+from ledger.db import connect, init_schema, load_transactions
+from ledger.ingest import ingest_from_dir
+from ledger.money import usdc_to_micro
 from ledger.report import build_report, render_summary, write_csv
 
 
@@ -105,6 +109,28 @@ def test_csv_has_one_row_per_transaction_with_headers(tmp_path: Path):
             "category_label", "confidence_tier", "rule_matched"} <= set(rows[0])
 
 
+def test_singular_payment_count_is_not_pluralized(tmp_path: Path):
+    conn = prepared(tmp_path)
+    summary = render_summary(build_report(conn, "2026-08-15", "2026-08-15"))
+
+    assert "(1 payment)" in summary
+    assert "(1 payments)" not in summary
+
+
+def test_plural_payment_count_is_pluralized(tmp_path: Path):
+    conn = prepared(tmp_path)
+    summary = render_summary(build_report(conn, "2026-08-01", "2026-08-31"))
+
+    assert "(3 payments)" in summary
+
+
+def test_disclaimer_is_present_in_the_rendered_summary(tmp_path: Path):
+    conn = prepared(tmp_path)
+    summary = render_summary(build_report(conn, "2026-08-01", "2026-08-31"))
+
+    assert "not tax or accounting advice" in summary.lower()
+
+
 def test_csv_amounts_are_exact_decimal_strings(tmp_path: Path):
     conn = prepared(tmp_path)
     out = tmp_path / "report.csv"
@@ -114,3 +140,95 @@ def test_csv_amounts_are_exact_decimal_strings(tmp_path: Path):
     amounts = {row["amount_usdc"] for row in rows}
     assert "1.000000" in amounts
     assert "0.500000" in amounts
+
+
+def test_grand_total_reconciles_across_summary_breakdown_csv_and_ingest(
+    tmp_path: Path,
+):
+    """The single most important property: money is neither lost nor invented
+    anywhere along ingest -> categorize -> report. Every view of the total
+    (summary header, sum of breakdown lines, sum of the CSV column, and the
+    sum of what was actually ingested) must agree exactly, in integer
+    micro-USDC. Never compare via float.
+    """
+    source = tmp_path / "data"
+    source.mkdir()
+    known_rows = [
+        {
+            "tx_hash": f"0x{i}",
+            "sender_address": "0xa" if i < 3 else f"0xsolo{i}",
+            "receiver_address": "0xm",
+            "amount_micro_usdc": amount,
+            "timestamp": f"2026-08-{10 + i:02d}T10:00:00Z",
+            "memo": None,
+            "chain": "sim",
+            "raw_payload": "{}",
+        }
+        for i, amount in enumerate([1_000_000, 2_500_000, 750_000, 333_333, 999])
+    ]
+    (source / "transactions.json").write_text(json.dumps(known_rows))
+
+    conn = connect(tmp_path / "t.db")
+    init_schema(conn)
+    ingest_result = ingest_from_dir(conn, source)
+    assert ingest_result.rejects == []
+    ingested_total = sum(row["amount_micro_usdc"] for row in known_rows)
+
+    run_categorize(conn)
+
+    data = build_report(conn, "2026-08-01", "2026-08-31")
+    breakdown_total = sum(line.total_micro_usdc for line in data.lines)
+
+    csv_path = tmp_path / "report.csv"
+    write_csv(conn, "2026-08-01", "2026-08-31", csv_path)
+    csv_rows = list(csv.DictReader(csv_path.read_text().splitlines()))
+    csv_total_micro = sum(usdc_to_micro(row["amount_usdc"]) for row in csv_rows)
+
+    assert data.total_micro_usdc == ingested_total
+    assert breakdown_total == ingested_total
+    assert csv_total_micro == ingested_total
+
+
+def test_near_miss_addresses_receive_different_category_labels():
+    """A regression guard for the cascade collapsing near-miss senders: two
+    distinct agents that merely share an address prefix must never be filed
+    under the same label, even though they satisfy the >= 10-char-prefix
+    check the older, weaker test only pinned indirectly.
+    """
+    import dataclasses
+
+    from ledger.categorize import categorize_transactions
+    from ledger.simulate import generate_batch
+
+    batch = generate_batch(count=120, seed=1)
+    near_miss_groups = {"agent-nearmiss-a", "agent-nearmiss-b"}
+    near_miss_hashes = {
+        tx_hash
+        for tx_hash, group in batch.ground_truth.items()
+        if group in near_miss_groups
+    }
+    near_miss_txns = [t for t in batch.transactions if t.tx_hash in near_miss_hashes]
+    assert len(near_miss_txns) >= 2
+
+    # Give each a stable synthetic id so categorization output can be mapped
+    # back by tx_hash.
+    numbered = [
+        dataclasses.replace(t, id=i) for i, t in enumerate(near_miss_txns)
+    ]
+
+    cats = categorize_transactions(numbered)
+    by_hash = {t.tx_hash: c for t, c in zip(numbered, cats)}
+
+    labels_a = {
+        by_hash[tx_hash].category_label
+        for tx_hash, group in batch.ground_truth.items()
+        if group == "agent-nearmiss-a" and tx_hash in by_hash
+    }
+    labels_b = {
+        by_hash[tx_hash].category_label
+        for tx_hash, group in batch.ground_truth.items()
+        if group == "agent-nearmiss-b" and tx_hash in by_hash
+    }
+    assert labels_a, "expected near-miss group a to be present"
+    assert labels_b, "expected near-miss group b to be present"
+    assert labels_a.isdisjoint(labels_b)

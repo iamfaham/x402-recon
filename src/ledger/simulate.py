@@ -101,8 +101,11 @@ def generate_batch(count: int = 120, seed: int = 42) -> SimulatedBatch:
         clock += timedelta(seconds=rng.randint(10, 400))
         add(_address(rng), "invoice-settlement", "agent-rotating", clock)
 
-    # One-off senders that belong to no group. Some land inside a tight burst,
-    # so time-clustering has something plausible but wrong to latch onto.
+    # One-off senders that belong to no group. The clock is strictly monotonic
+    # and these are appended last, so they form one contiguous tail and only
+    # ever cluster with each other, never with a real agent burst. Interleaving
+    # them into the agent bursts above so time-clustering has a genuinely
+    # plausible-but-wrong case to latch onto is a known v0.1 improvement.
     while len(transactions) < count:
         clock += timedelta(seconds=rng.randint(10, 400))
         add(_address(rng), rng.choice(_GENERIC_MEMOS), UNGROUPABLE, clock)

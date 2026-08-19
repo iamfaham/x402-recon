@@ -6,6 +6,7 @@ while tuning.
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from ledger.categorize import run_categorize
@@ -14,6 +15,33 @@ from ledger.evaluate import render_evaluation, run_evaluate
 from ledger.ingest import format_ingest_summary, ingest_from_dir
 from ledger.report import build_report, render_summary, write_csv
 from ledger.simulate import generate_batch, write_batch
+
+_DATE_FORMAT = "%Y-%m-%d"
+
+
+def _valid_date(value: str) -> str:
+    """argparse `type=` validator for --from/--to.
+
+    Must be strict zero-padded YYYY-MM-DD. strptime already rejects
+    out-of-range values like "2026-13-99", but it happily accepts unpadded
+    input like "2026-8-1", which is exactly what a non-technical user is
+    likely to type. Re-formatting the parsed value and comparing it back to
+    the original catches that case too, so a date the user almost certainly
+    did not mean is never silently accepted.
+    """
+    try:
+        parsed = datetime.strptime(value, _DATE_FORMAT)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid date {value!r}: expected YYYY-MM-DD (zero-padded), "
+            f"e.g. 2026-08-01 ({exc})"
+        ) from None
+    if parsed.strftime(_DATE_FORMAT) != value:
+        raise argparse.ArgumentTypeError(
+            f"invalid date {value!r}: expected YYYY-MM-DD (zero-padded), "
+            f"e.g. 2026-08-01"
+        )
+    return value
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -39,8 +67,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("categorize", help="run the categorization cascade")
 
     report = sub.add_parser("report", help="summarize a date range")
-    report.add_argument("--from", dest="start", required=True, help="YYYY-MM-DD")
-    report.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD")
+    report.add_argument(
+        "--from", dest="start", required=True, type=_valid_date, help="YYYY-MM-DD"
+    )
+    report.add_argument(
+        "--to", dest="end", required=True, type=_valid_date, help="YYYY-MM-DD"
+    )
     report.add_argument("--csv", help="also write line-item detail to this CSV path")
 
     sub.add_parser("evaluate", help="score categorization against ground truth")

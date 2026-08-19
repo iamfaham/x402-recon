@@ -15,6 +15,11 @@ from pathlib import Path
 from ledger.categorize import CONFIDENT, UNCATEGORIZED
 from ledger.money import format_usdc, micro_to_decimal
 
+
+def _payments(count: int) -> str:
+    """Pluralize the payment count so a lone entry reads as "1 payment"."""
+    return "payment" if count == 1 else "payments"
+
 _SELECT_IN_RANGE = """
 SELECT t.tx_hash, t.timestamp, t.sender_address, t.memo, t.amount_micro_usdc,
        COALESCE(c.category_label, 'uncategorized')  AS category_label,
@@ -117,7 +122,7 @@ def render_summary(data: ReportData) -> str:
         "=" * len(header),
         "",
         f"Total received:     {format_usdc(data.total_micro_usdc)}"
-        f"  ({data.transaction_count} payments)",
+        f"  ({data.transaction_count} {_payments(data.transaction_count)})",
         f"  Confidently identified: {format_usdc(data.confident_micro_usdc)}",
         f"  Needs review:           {format_usdc(data.uncertain_micro_usdc)}",
         "",
@@ -134,7 +139,7 @@ def render_summary(data: ReportData) -> str:
         marker = "" if line.confidence_tier == CONFIDENT else "   [needs review]"
         lines.append(
             f"  {name:<48} {format_usdc(line.total_micro_usdc):>16}"
-            f"  ({line.transaction_count} payments){marker}"
+            f"  ({line.transaction_count} {_payments(line.transaction_count)}){marker}"
         )
 
     lines += [

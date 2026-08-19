@@ -103,6 +103,20 @@ def test_rejects_malformed_timestamp(tmp_path: Path):
     assert "timestamp" in result.rejects[0][1]
 
 
+def test_rejects_unpadded_timestamp(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(
+        tmp_path, [valid_row("0x1", timestamp="2026-8-1T5:0:0Z")]
+    )
+
+    result = ingest_from_dir(conn, source)
+
+    assert result.inserted == 0
+    assert len(result.rejects) == 1
+    assert "timestamp" in result.rejects[0][1].lower()
+    assert "zero-padded" in result.rejects[0][1].lower()
+
+
 def test_loads_ground_truth_when_present(tmp_path: Path):
     conn = fresh_conn(tmp_path)
     source = write_source(tmp_path, [valid_row("0x1")], ground_truth={"0x1": "agent-a"})

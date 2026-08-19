@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from ledger.cli import main
 
 
@@ -77,3 +79,57 @@ def test_report_on_empty_range_does_not_claim_zero_revenue(tmp_path: Path, capsy
 
     main(["--db", str(db), "report", "--from", "2020-01-01", "--to", "2020-01-31"])
     assert "No transactions found" in capsys.readouterr().out
+
+
+def test_report_accepts_a_valid_zero_padded_date_range(tmp_path: Path, capsys):
+    db = tmp_path / "ledger.db"
+    data = tmp_path / "data"
+
+    main(["simulate", "--out", str(data), "--count", "120", "--seed", "1"])
+    main(["--db", str(db), "ingest", "--from", str(data)])
+    main(["--db", str(db), "categorize"])
+    capsys.readouterr()
+
+    exit_code = main(
+        ["--db", str(db), "report", "--from", "2026-08-01", "--to", "2026-09-30"]
+    )
+    assert exit_code == 0
+    assert "Total received" in capsys.readouterr().out
+
+
+def test_report_rejects_unpadded_date(tmp_path: Path, capsys):
+    db = tmp_path / "ledger.db"
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--db", str(db), "report", "--from", "2026-8-1", "--to", "2026-09-30"])
+    assert excinfo.value.code != 0
+    assert "2026-8-1" in capsys.readouterr().err
+
+
+def test_report_rejects_out_of_range_date(tmp_path: Path, capsys):
+    db = tmp_path / "ledger.db"
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            ["--db", str(db), "report", "--from", "2026-08-01", "--to", "2026-13-99"]
+        )
+    assert excinfo.value.code != 0
+    assert "2026-13-99" in capsys.readouterr().err
+
+
+def test_report_rejects_garbage_date(tmp_path: Path, capsys):
+    db = tmp_path / "ledger.db"
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--db", str(db), "report", "--from", "garbage", "--to", "2026-09-30"])
+    assert excinfo.value.code != 0
+    assert "garbage" in capsys.readouterr().err
+
+
+def test_report_date_error_names_the_expected_format(tmp_path: Path, capsys):
+    db = tmp_path / "ledger.db"
+
+    with pytest.raises(SystemExit):
+        main(["--db", str(db), "report", "--from", "garbage", "--to", "2026-09-30"])
+    err = capsys.readouterr().err
+    assert "YYYY-MM-DD" in err

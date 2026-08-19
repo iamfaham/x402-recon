@@ -48,10 +48,20 @@ def _validate(row: dict) -> tuple[Transaction | None, str | None]:
     if amount < 0:
         return None, f"amount must not be negative, got {amount}"
 
+    timestamp = row["timestamp"]
     try:
-        datetime.strptime(row["timestamp"], _TIMESTAMP_FORMAT)
+        parsed = datetime.strptime(timestamp, _TIMESTAMP_FORMAT)
     except (ValueError, TypeError):
-        return None, f"timestamp must be ISO 8601 UTC, got {row['timestamp']!r}"
+        return None, f"timestamp must be ISO 8601 UTC, got {timestamp!r}"
+    # strptime alone accepts unpadded values like "2026-8-1T5:0:0Z". Everything
+    # downstream compares timestamps lexicographically on the stored text, so an
+    # unpadded value would sort and range-filter wrongly forever after. Confirm
+    # the parsed value re-formats back to exactly what was given.
+    if parsed.strftime(_TIMESTAMP_FORMAT) != timestamp:
+        return None, (
+            "timestamp must be zero-padded ISO 8601 UTC (YYYY-MM-DDTHH:MM:SSZ), "
+            f"got {timestamp!r}"
+        )
 
     return (
         Transaction(
