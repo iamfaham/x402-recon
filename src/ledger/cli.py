@@ -84,10 +84,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "simulate":
         batch = generate_batch(count=args.count, seed=args.seed)
-        tx_path, gt_path = write_batch(batch, Path(args.out))
+        tx_path, gt_path, hz_path = write_batch(batch, Path(args.out))
         print(f"Generated {len(batch.transactions)} transactions.")
-        print(f"  {tx_path}")
-        print(f"  {gt_path}")
+        for path in (tx_path, gt_path, hz_path):
+            print(f"  {path}")
         return 0
 
     conn = connect(Path(args.db))

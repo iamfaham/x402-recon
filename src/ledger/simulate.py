@@ -1,9 +1,13 @@
 """Synthetic x402-style transaction generator with ground truth.
 
-The dataset must be able to break the cascade. It deliberately includes repeat
-senders across separated bursts, one-off senders that belong to no group,
-generic and absent memos, and near-miss addresses that share a prefix but must
-not be collapsed together.
+Every actor generates its activity independently across one shared time
+window; all events then merge and sort by timestamp. Interleaving is therefore
+a property of how generation works rather than a feature bolted on — which is
+what lets a one-off payment land inside a real agent's burst, and lets
+time-clustering be caught guessing wrong.
+
+Each hazard exists to make one cascade rule falsifiable. A dataset that cannot
+catch a rule being wrong cannot measure it either.
 """
 
 import json
@@ -12,13 +16,27 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ledger.models import TIMESTAMP_FORMAT, UNGROUPABLE, Transaction
+from ledger.models import (
+    TIMESTAMP_FORMAT,
+    TX_TYPE_PAYMENT,
+    TX_TYPE_REFUND,
+    UNGROUPABLE,
+    Transaction,
+)
 
 _CHAIN = "base-sepolia-sim"
 _RECEIVER = "0xmerchant000000000000000000000000000000001"
-_START = datetime(2026, 8, 1, 9, 0, 0, tzinfo=UTC)
+_WINDOW_START = datetime(2026, 8, 1, 9, 0, 0, tzinfo=UTC)
+_WINDOW_SECONDS = 14 * 24 * 3600  # a two-week trading window
 
-# Recurring agents: (group name, memo or None, number of bursts)
+# Hazard names, recorded per transaction in hazards.json.
+HAZARD_INTERLEAVED_ONE_OFF = "interleaved_one_off"
+HAZARD_SHARED_MEMO = "shared_memo_strangers"
+HAZARD_ROTATING_ADDRESS = "rotating_address"
+HAZARD_MEMO_DRIFT = "memo_drift"
+HAZARD_REFUND = "refund"
+
+# Ordinary recurring agents: (group, memo or None, burst count).
 _AGENTS = [
     ("agent-weather", "weather-api", 3),
     ("agent-search", "search-api", 3),
@@ -30,92 +48,224 @@ _AGENTS = [
 _GENERIC_MEMOS = [None, "payment", "x402", ""]
 
 
+@dataclass(frozen=True)
+class HazardConfig:
+    """How much adversarial material the dataset carries.
+
+    Frozen before measurement so dataset difficulty is a deliberate setting.
+    A later change in the metrics can then be attributed to a rule change
+    rather than to silent drift in how hard the data got.
+    """
+
+    interleaved_one_offs: int = 22
+    shared_memo_strangers: int = 6
+    rotating_address_payments: int = 6
+    memo_drift_agents: int = 1
+    refund_count: int = 8
+
+
+DEFAULT_HAZARDS = HazardConfig()
+
+
+@dataclass(frozen=True)
+class SimulatedBatch:
+    """Generated transactions, their correct grouping, and hazard tags."""
+
+    transactions: list[Transaction]
+    ground_truth: dict[str, str]
+    hazards: dict[str, str]
+
+
+@dataclass
+class _Event:
+    moment: datetime
+    transaction: Transaction
+    true_group: str
+    hazard: str | None
+
+
 def _iso(moment: datetime) -> str:
     return moment.strftime(TIMESTAMP_FORMAT)
 
 
 def _address(rng: random.Random, prefix: str = "0x") -> str:
-    """Generate an address of realistic length, optionally sharing a prefix."""
-    body_length = 42 - len(prefix)
-    body = "".join(rng.choice("0123456789abcdef") for _ in range(body_length))
+    body = "".join(rng.choice("0123456789abcdef") for _ in range(42 - len(prefix)))
     return prefix + body
 
 
-@dataclass(frozen=True)
-class SimulatedBatch:
-    """Generated transactions plus the correct grouping for each."""
+def _amount(rng: random.Random) -> int:
+    """Spread amounts from sub-cent dust to multi-dollar calls."""
+    if rng.random() < 0.35:
+        return rng.randint(200, 9_999)
+    return rng.randint(10_000, 4_000_000)
 
-    transactions: list[Transaction]
-    ground_truth: dict[str, str]
+
+def _somewhere_in_window(rng: random.Random) -> datetime:
+    return _WINDOW_START + timedelta(seconds=rng.randint(0, _WINDOW_SECONDS))
 
 
-def generate_batch(count: int = 120, seed: int = 42) -> SimulatedBatch:
-    """Generate at least `count` transactions with known ground truth."""
-    rng = random.Random(seed)
-    transactions: list[Transaction] = []
-    ground_truth: dict[str, str] = {}
-    clock = _START
+class _Builder:
+    """Accumulates events; every emission records group and hazard together."""
 
-    def add(sender: str, memo: str | None, group: str, moment: datetime) -> None:
-        tx_hash = "0x" + "".join(rng.choice("0123456789abcdef") for _ in range(64))
-        transactions.append(
-            Transaction(
-                tx_hash=tx_hash,
-                sender_address=sender,
-                receiver_address=_RECEIVER,
-                amount_micro_usdc=rng.randint(500, 250_000),
-                timestamp=_iso(moment),
-                memo=memo,
-                chain=_CHAIN,
-                raw_payload=json.dumps({"protocol": "x402", "simulated": True}),
-            )
+    def __init__(self, rng: random.Random) -> None:
+        self.rng = rng
+        self.events: list[_Event] = []
+
+    def emit(
+        self,
+        sender: str,
+        memo: str | None,
+        group: str,
+        moment: datetime,
+        hazard: str | None = None,
+        tx_type: str = TX_TYPE_PAYMENT,
+        amount: int | None = None,
+    ) -> Transaction:
+        tx_hash = "0x" + "".join(
+            self.rng.choice("0123456789abcdef") for _ in range(64)
         )
-        ground_truth[tx_hash] = group
+        transaction = Transaction(
+            tx_hash=tx_hash,
+            sender_address=sender,
+            receiver_address=_RECEIVER,
+            amount_micro_usdc=amount if amount is not None else _amount(self.rng),
+            timestamp=_iso(moment),
+            memo=memo,
+            chain=_CHAIN,
+            raw_payload=json.dumps({"protocol": "x402", "simulated": True}),
+            tx_type=tx_type,
+        )
+        self.events.append(_Event(moment, transaction, group, hazard))
+        return transaction
 
-    # Recurring agents, each appearing in separated bursts.
+    def burst(
+        self,
+        sender: str,
+        memo: str | None,
+        group: str,
+        size: int,
+        hazard: str | None = None,
+    ) -> list[Transaction]:
+        """One session: several payments minutes apart, placed anywhere."""
+        moment = _somewhere_in_window(self.rng)
+        made = []
+        for _ in range(size):
+            moment += timedelta(seconds=self.rng.randint(5, 120))
+            made.append(self.emit(sender, memo, group, moment, hazard))
+        return made
+
+
+def generate_batch(
+    count: int = 120,
+    seed: int = 42,
+    hazards: HazardConfig = DEFAULT_HAZARDS,
+) -> SimulatedBatch:
+    """Generate at least `count` transactions with ground truth and hazard tags."""
+    rng = random.Random(seed)
+    b = _Builder(rng)
+
+    # Ordinary recurring agents — the bulk of the data, which every rule is
+    # expected to get right.
     for group, memo, bursts in _AGENTS:
         sender = _address(rng)
         for _ in range(bursts):
-            clock += timedelta(hours=rng.randint(2, 20))
-            for _ in range(rng.randint(4, 9)):
-                clock += timedelta(seconds=rng.randint(5, 120))
-                add(sender, memo, group, clock)
+            b.burst(sender, memo, group, rng.randint(4, 9))
 
-    # Near-miss pair: two distinct agents sharing an address prefix.
+    # Near-miss pair: distinct agents whose addresses share a prefix.
     shared_prefix = "0x" + "".join(rng.choice("0123456789abcdef") for _ in range(8))
-    for suffix_group in ("agent-nearmiss-a", "agent-nearmiss-b"):
-        sender = _address(rng, prefix=shared_prefix)
-        clock += timedelta(hours=rng.randint(2, 8))
-        for _ in range(rng.randint(3, 6)):
-            clock += timedelta(seconds=rng.randint(5, 120))
-            add(sender, "data-feed", suffix_group, clock)
+    for group in ("agent-nearmiss-a", "agent-nearmiss-b"):
+        b.burst(_address(rng, prefix=shared_prefix), "data-feed", group, rng.randint(3, 6))
 
-    # An agent that rotates its sender address on every transaction but keeps
-    # one consistent, specific memo (a fresh wallet per payment, tagged with
-    # the same service identifier). Each sender appears exactly once, so
-    # sender_match cannot fire; the shared specific memo is what makes these
-    # groupable, which is exactly what memo_match exists to catch.
-    for _ in range(6):
-        clock += timedelta(seconds=rng.randint(10, 400))
-        add(_address(rng), "invoice-settlement", "agent-rotating", clock)
+    # HAZARD: an agent rotating its address every payment. sender_match cannot
+    # fire (each sender appears once) and will split this payer if it tries.
+    for _ in range(hazards.rotating_address_payments):
+        b.emit(
+            _address(rng),
+            "invoice-settlement",
+            "agent-rotating",
+            _somewhere_in_window(rng),
+            hazard=HAZARD_ROTATING_ADDRESS,
+        )
 
-    # One-off senders that belong to no group. The clock is strictly monotonic
-    # and these are appended last, so they form one contiguous tail and only
-    # ever cluster with each other, never with a real agent burst. Interleaving
-    # them into the agent bursts above so time-clustering has a genuinely
-    # plausible-but-wrong case to latch onto is a known v0.1 improvement.
-    while len(transactions) < count:
-        clock += timedelta(seconds=rng.randint(10, 400))
-        add(_address(rng), rng.choice(_GENERIC_MEMOS), UNGROUPABLE, clock)
+    # HAZARD: memo drift. One payer, one address, a memo that changes.
+    for i in range(hazards.memo_drift_agents):
+        sender = _address(rng)
+        group = f"agent-drift-{i}"
+        for version, memo in enumerate(("report-api", "report-api-v2", "reports")):
+            moment = _somewhere_in_window(rng)
+            for _ in range(rng.randint(2, 4)):
+                moment += timedelta(seconds=rng.randint(5, 120))
+                b.emit(sender, memo, group, moment, hazard=HAZARD_MEMO_DRIFT)
 
-    return SimulatedBatch(transactions=transactions, ground_truth=ground_truth)
+    # HAZARD: strangers sharing one specific memo. memo_match will collapse
+    # them; ground truth says they are different payers.
+    for i in range(hazards.shared_memo_strangers):
+        b.emit(
+            _address(rng),
+            "monthly-usage",
+            f"agent-stranger-{i}",
+            _somewhere_in_window(rng),
+            hazard=HAZARD_SHARED_MEMO,
+        )
+
+    # HAZARD: one-off payers scattered across the window. Because everything
+    # shares one timeline, these land inside real agent bursts — giving
+    # time_cluster both plausible-but-wrong and plausible-and-right cases.
+    for _ in range(hazards.interleaved_one_offs):
+        b.emit(
+            _address(rng),
+            rng.choice(_GENERIC_MEMOS),
+            UNGROUPABLE,
+            _somewhere_in_window(rng),
+            hazard=HAZARD_INTERLEAVED_ONE_OFF,
+        )
+
+    # HAZARD: refunds against real earlier payments, same payer and group.
+    refundable = [e for e in b.events if e.true_group != UNGROUPABLE]
+    for original in rng.sample(refundable, min(hazards.refund_count, len(refundable))):
+        b.emit(
+            original.transaction.sender_address,
+            original.transaction.memo,
+            original.true_group,
+            original.moment + timedelta(hours=rng.randint(1, 48)),
+            hazard=HAZARD_REFUND,
+            tx_type=TX_TYPE_REFUND,
+            amount=original.transaction.amount_micro_usdc,
+        )
+
+    # Top up with further ungroupable one-offs until the requested size. This
+    # filler exists only to reach `count`; it is not adversarial material, so
+    # it carries no hazard tag. Only the configured
+    # `hazards.interleaved_one_offs` count is tagged HAZARD_INTERLEAVED_ONE_OFF
+    # — bounding hazard tags by HazardConfig alone (rather than by how long a
+    # random top-up loop happens to run) is what keeps dataset difficulty a
+    # deliberate, frozen setting.
+    while len(b.events) < count:
+        b.emit(
+            _address(rng),
+            rng.choice(_GENERIC_MEMOS),
+            UNGROUPABLE,
+            _somewhere_in_window(rng),
+        )
+
+    # One shared timeline. Ties break on tx_hash so runs cannot reorder.
+    b.events.sort(key=lambda e: (e.transaction.timestamp, e.transaction.tx_hash))
+
+    return SimulatedBatch(
+        transactions=[e.transaction for e in b.events],
+        ground_truth={e.transaction.tx_hash: e.true_group for e in b.events},
+        hazards={
+            e.transaction.tx_hash: e.hazard for e in b.events if e.hazard is not None
+        },
+    )
 
 
-def write_batch(batch: SimulatedBatch, out_dir: Path) -> tuple[Path, Path]:
-    """Write transactions.json and ground_truth.json into out_dir."""
+def write_batch(batch: SimulatedBatch, out_dir: Path) -> tuple[Path, Path, Path]:
+    """Write transactions.json, ground_truth.json, and hazards.json."""
     out_dir.mkdir(parents=True, exist_ok=True)
     tx_path = out_dir / "transactions.json"
     gt_path = out_dir / "ground_truth.json"
+    hz_path = out_dir / "hazards.json"
 
     tx_path.write_text(
         json.dumps(
@@ -129,6 +279,7 @@ def write_batch(batch: SimulatedBatch, out_dir: Path) -> tuple[Path, Path]:
                     "memo": t.memo,
                     "chain": t.chain,
                     "raw_payload": t.raw_payload,
+                    "tx_type": t.tx_type,
                 }
                 for t in batch.transactions
             ],
@@ -136,4 +287,5 @@ def write_batch(batch: SimulatedBatch, out_dir: Path) -> tuple[Path, Path]:
         )
     )
     gt_path.write_text(json.dumps(batch.ground_truth, indent=2))
-    return tx_path, gt_path
+    hz_path.write_text(json.dumps(batch.hazards, indent=2))
+    return tx_path, gt_path, hz_path
