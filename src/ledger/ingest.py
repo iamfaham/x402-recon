@@ -14,7 +14,29 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from ledger.models import TIMESTAMP_FORMAT, Transaction
+from ledger.models import TIMESTAMP_FORMAT, TX_TYPE_PAYMENT, TX_TYPE_REFUND, Transaction
+
+_VALID_TX_TYPES = frozenset({TX_TYPE_PAYMENT, TX_TYPE_REFUND})
+
+
+class IngestError(RuntimeError):
+    """Raised when a source file is missing or unreadable.
+
+    Distinct from a rejected row: a reject is one bad transaction among good
+    ones, while this means the source itself cannot be read at all.
+    """
+
+
+def _load_json_file(path: Path, expected: type, description: str):
+    """Read one JSON file, failing with an actionable message."""
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise IngestError(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(payload, expected):
+        raise IngestError(f"{path} must contain {description}")
+    return payload
+
 
 _REQUIRED_FIELDS = (
     "tx_hash",
@@ -62,6 +84,12 @@ def _validate(row: dict) -> tuple[Transaction | None, str | None]:
             f"got {timestamp!r}"
         )
 
+    tx_type = row.get("tx_type", TX_TYPE_PAYMENT)
+    if tx_type not in _VALID_TX_TYPES:
+        return None, (
+            f"tx_type must be one of {sorted(_VALID_TX_TYPES)}, got {tx_type!r}"
+        )
+
     return (
         Transaction(
             tx_hash=row["tx_hash"],
@@ -72,6 +100,7 @@ def _validate(row: dict) -> tuple[Transaction | None, str | None]:
             memo=row.get("memo"),
             chain=row["chain"],
             raw_payload=row.get("raw_payload", "{}"),
+            tx_type=tx_type,
         ),
         None,
     )
@@ -79,7 +108,13 @@ def _validate(row: dict) -> tuple[Transaction | None, str | None]:
 
 def ingest_from_dir(conn: sqlite3.Connection, source_dir: Path) -> IngestResult:
     """Load transactions.json (and ground_truth.json if present) into SQLite."""
-    rows = json.loads((source_dir / "transactions.json").read_text())
+    tx_path = source_dir / "transactions.json"
+    if not tx_path.exists():
+        raise IngestError(
+            f"no transactions.json found in {source_dir} - "
+            "check the --from path points at a generated data directory"
+        )
+    rows = _load_json_file(tx_path, list, "a JSON array of transactions")
 
     inserted = 0
     skipped = 0
@@ -100,8 +135,8 @@ def ingest_from_dir(conn: sqlite3.Connection, source_dir: Path) -> IngestResult:
             conn.execute(
                 """INSERT INTO transactions
                    (tx_hash, sender_address, receiver_address, amount_micro_usdc,
-                    timestamp, memo, chain, raw_payload)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    timestamp, memo, chain, raw_payload, tx_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     transaction.tx_hash,
                     transaction.sender_address,
@@ -111,6 +146,7 @@ def ingest_from_dir(conn: sqlite3.Connection, source_dir: Path) -> IngestResult:
                     transaction.memo,
                     transaction.chain,
                     transaction.raw_payload,
+                    transaction.tx_type,
                 ),
             )
             inserted += 1
@@ -119,10 +155,22 @@ def ingest_from_dir(conn: sqlite3.Connection, source_dir: Path) -> IngestResult:
 
     ground_truth_path = source_dir / "ground_truth.json"
     if ground_truth_path.exists():
-        truth = json.loads(ground_truth_path.read_text())
+        truth = _load_json_file(
+            ground_truth_path, dict, "a ground_truth mapping of tx_hash to group name"
+        )
         conn.executemany(
             "INSERT OR REPLACE INTO ground_truth (tx_hash, true_group) VALUES (?, ?)",
             list(truth.items()),
+        )
+
+    hazards_path = source_dir / "hazards.json"
+    if hazards_path.exists():
+        hazards = _load_json_file(
+            hazards_path, dict, "a hazards mapping of tx_hash to hazard name"
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO hazards (tx_hash, hazard) VALUES (?, ?)",
+            list(hazards.items()),
         )
 
     conn.commit()

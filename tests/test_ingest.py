@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from ledger.db import connect, init_schema, load_transactions
-from ledger.ingest import format_ingest_summary, ingest_from_dir
+from ledger.ingest import IngestError, format_ingest_summary, ingest_from_dir
+from ledger.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND
 
 
 def write_source(tmp_path: Path, rows: list[dict], ground_truth: dict | None = None) -> Path:
@@ -149,3 +152,94 @@ def test_summary_reports_rejects_visibly(tmp_path: Path):
     assert "1" in summary
     assert "reject" in summary.lower()
     assert "chain" in summary
+
+
+def test_tx_type_defaults_to_payment_when_absent(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(tmp_path, [valid_row("0x1")])
+    ingest_from_dir(conn, source)
+    row = conn.execute("SELECT tx_type FROM transactions").fetchone()
+    assert row["tx_type"] == TX_TYPE_PAYMENT
+
+
+def test_refund_tx_type_is_accepted(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(tmp_path, [valid_row("0x1", tx_type=TX_TYPE_REFUND)])
+    result = ingest_from_dir(conn, source)
+    assert result.inserted == 1
+    row = conn.execute("SELECT tx_type FROM transactions").fetchone()
+    assert row["tx_type"] == TX_TYPE_REFUND
+
+
+def test_unknown_tx_type_is_rejected(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(tmp_path, [valid_row("0x1", tx_type="chargeback")])
+    result = ingest_from_dir(conn, source)
+    assert result.inserted == 0
+    assert len(result.rejects) == 1
+    assert "tx_type" in result.rejects[0][1]
+
+
+def test_refunds_are_still_rejected_when_negative(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(
+        tmp_path, [valid_row("0x1", tx_type=TX_TYPE_REFUND, amount_micro_usdc=-5)]
+    )
+    result = ingest_from_dir(conn, source)
+    assert result.inserted == 0
+    assert len(result.rejects) == 1
+
+
+def test_hazards_file_is_loaded_when_present(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(tmp_path, [valid_row("0x1")])
+    (source / "hazards.json").write_text(json.dumps({"0x1": "interleaved_one_off"}))
+
+    ingest_from_dir(conn, source)
+
+    row = conn.execute("SELECT tx_hash, hazard FROM hazards").fetchone()
+    assert row["hazard"] == "interleaved_one_off"
+
+
+def test_missing_hazards_file_is_normal(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(tmp_path, [valid_row("0x1")])
+    result = ingest_from_dir(conn, source)
+    assert result.inserted == 1
+    assert conn.execute("SELECT COUNT(*) AS n FROM hazards").fetchone()["n"] == 0
+
+
+def test_missing_source_directory_raises_ingest_error(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    with pytest.raises(IngestError) as exc:
+        ingest_from_dir(conn, tmp_path / "nope")
+    assert "transactions.json" in str(exc.value)
+
+
+def test_malformed_transactions_json_raises_ingest_error(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = tmp_path / "data"
+    source.mkdir()
+    (source / "transactions.json").write_text("{not json")
+    with pytest.raises(IngestError) as exc:
+        ingest_from_dir(conn, source)
+    assert "valid JSON" in str(exc.value)
+
+
+def test_transactions_json_must_be_an_array(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = tmp_path / "data"
+    source.mkdir()
+    (source / "transactions.json").write_text(json.dumps({"tx_hash": "0x1"}))
+    with pytest.raises(IngestError) as exc:
+        ingest_from_dir(conn, source)
+    assert "array" in str(exc.value)
+
+
+def test_malformed_ground_truth_raises_ingest_error(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(tmp_path, [valid_row("0x1")])
+    (source / "ground_truth.json").write_text(json.dumps(["not", "a", "mapping"]))
+    with pytest.raises(IngestError) as exc:
+        ingest_from_dir(conn, source)
+    assert "ground_truth" in str(exc.value)
