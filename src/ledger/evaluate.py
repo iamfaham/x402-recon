@@ -111,7 +111,7 @@ def render_evaluation(result: EvaluationResult) -> str:
         f"Recall:      {result.recall:.1%}"
         f"   (of {result.groupable_count} groupable payments, how many we caught correctly)",
         "",
-        "Calibration — does 'confident' actually mean confident?",
+        "Calibration - does 'confident' actually mean confident?",
         f"  Confident tier accuracy: {result.confident_accuracy:.1%}"
         f"  ({result.confident_count} payments)",
         f"  Uncertain tier accuracy: {result.uncertain_accuracy:.1%}"
@@ -122,7 +122,7 @@ def render_evaluation(result: EvaluationResult) -> str:
         lines += [
             "",
             "  WARNING: the confident tier is no more accurate than the uncertain",
-            "  tier. The confidence signal is not meaningful — treat confident",
+            "  tier. The confidence signal is not meaningful - treat confident",
             "  groupings as unverified until the cascade is retuned.",
         ]
 

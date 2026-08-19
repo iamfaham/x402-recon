@@ -109,7 +109,7 @@ def render_summary(data: ReportData) -> str:
         return (
             f"{header}\n\n"
             "No transactions found in this date range.\n"
-            "(This is not a total of zero — there is simply nothing recorded here.)"
+            "(This is not a total of zero - there is simply nothing recorded here.)"
         )
 
     lines = [
