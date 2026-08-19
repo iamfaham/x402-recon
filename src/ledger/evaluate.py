@@ -13,8 +13,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
-from ledger.categorize import CONFIDENT, UNCATEGORIZED
-from ledger.simulate import UNGROUPABLE
+from ledger.models import CONFIDENT, UNCATEGORIZED, UNGROUPABLE
 
 
 @dataclass(frozen=True)

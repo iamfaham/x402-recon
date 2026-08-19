@@ -6,6 +6,35 @@ Sepolia, a public dataset) produces Transactions; nothing downstream changes.
 
 from dataclasses import dataclass
 
+# --- Canonical vocabulary -------------------------------------------------
+# Every stage shares these strings. They live here, beside the data shapes,
+# because a value duplicated across modules is a value that will eventually
+# disagree with itself.
+
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+# Ground-truth vocabulary. UNGROUPABLE marks a transaction that genuinely
+# belongs to no group. A human labeling real transactions writes this string,
+# so it is ground-truth vocabulary rather than simulator vocabulary.
+UNGROUPABLE = "__ungroupable__"
+
+# Confidence tiers.
+CONFIDENT = "confident"
+UNCERTAIN = "uncertain"
+
+# The label given when no rule fired.
+UNCATEGORIZED = "uncategorized"
+
+# Cascade rule names.
+RULE_SENDER_MATCH = "sender_match"
+RULE_MEMO_MATCH = "memo_match"
+RULE_TIME_CLUSTER = "time_cluster"
+RULE_NONE = "none"
+
+# Transaction direction.
+TX_TYPE_PAYMENT = "payment"
+TX_TYPE_REFUND = "refund"
+
 
 @dataclass(frozen=True)
 class Transaction:

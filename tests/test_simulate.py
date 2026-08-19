@@ -2,7 +2,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from ledger.simulate import UNGROUPABLE, generate_batch, write_batch
+from ledger.models import UNGROUPABLE
+from ledger.simulate import generate_batch, write_batch
 
 
 def test_generates_at_least_the_requested_count():

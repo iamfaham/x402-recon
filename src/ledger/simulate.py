@@ -12,9 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ledger.models import Transaction
-
-UNGROUPABLE = "__ungroupable__"
+from ledger.models import TIMESTAMP_FORMAT, UNGROUPABLE, Transaction
 
 _CHAIN = "base-sepolia-sim"
 _RECEIVER = "0xmerchant000000000000000000000000000000001"
@@ -33,7 +31,7 @@ _GENERIC_MEMOS = [None, "payment", "x402", ""]
 
 
 def _iso(moment: datetime) -> str:
-    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return moment.strftime(TIMESTAMP_FORMAT)
 
 
 def _address(rng: random.Random, prefix: str = "0x") -> str:

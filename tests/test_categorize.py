@@ -61,6 +61,11 @@ def test_memo_counts_excludes_generic_memos():
 
 
 from ledger.categorize import (
+    categorize_transactions,
+    find_time_clusters,
+    run_categorize,
+)
+from ledger.models import (
     CONFIDENT,
     RULE_MEMO_MATCH,
     RULE_NONE,
@@ -68,9 +73,6 @@ from ledger.categorize import (
     RULE_TIME_CLUSTER,
     UNCATEGORIZED,
     UNCERTAIN,
-    categorize_transactions,
-    find_time_clusters,
-    run_categorize,
 )
 from ledger.db import connect, init_schema
 

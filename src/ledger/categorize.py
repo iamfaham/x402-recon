@@ -16,16 +16,18 @@ from datetime import UTC, datetime, timedelta
 
 from ledger.config import DEFAULT_CONFIG, CascadeConfig
 from ledger.db import load_transactions
-from ledger.models import Categorization, Transaction
-
-CONFIDENT = "confident"
-UNCERTAIN = "uncertain"
-UNCATEGORIZED = "uncategorized"
-
-RULE_SENDER_MATCH = "sender_match"
-RULE_MEMO_MATCH = "memo_match"
-RULE_TIME_CLUSTER = "time_cluster"
-RULE_NONE = "none"
+from ledger.models import (
+    CONFIDENT,
+    RULE_MEMO_MATCH,
+    RULE_NONE,
+    RULE_SENDER_MATCH,
+    RULE_TIME_CLUSTER,
+    TIMESTAMP_FORMAT,
+    UNCATEGORIZED,
+    UNCERTAIN,
+    Categorization,
+    Transaction,
+)
 
 
 def is_generic_memo(memo: str | None, config: CascadeConfig) -> bool:
@@ -47,11 +49,8 @@ def build_memo_counts(txns: list[Transaction], config: CascadeConfig) -> Counter
     )
 
 
-_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-
-
 def _parse(timestamp: str) -> datetime:
-    return datetime.strptime(timestamp, _TIMESTAMP_FORMAT).replace(tzinfo=UTC)
+    return datetime.strptime(timestamp, TIMESTAMP_FORMAT).replace(tzinfo=UTC)
 
 
 def find_time_clusters(
@@ -96,7 +95,7 @@ def categorize_transactions(
     now: str | None = None,
 ) -> list[Categorization]:
     """Run the cascade over every transaction, in rule order."""
-    categorized_at = now or datetime.now(UTC).strftime(_TIMESTAMP_FORMAT)
+    categorized_at = now or datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
 
     sender_counts = build_sender_counts(txns)
     memo_counts = build_memo_counts(txns, config)

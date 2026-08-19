@@ -1,5 +1,5 @@
 from ledger.evaluate import render_evaluation, score
-from ledger.simulate import UNGROUPABLE
+from ledger.models import UNGROUPABLE
 
 
 def test_perfect_grouping_scores_one():

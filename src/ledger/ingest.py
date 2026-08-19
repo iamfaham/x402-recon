@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from ledger.models import Transaction
+from ledger.models import TIMESTAMP_FORMAT, Transaction
 
 _REQUIRED_FIELDS = (
     "tx_hash",
@@ -24,7 +24,6 @@ _REQUIRED_FIELDS = (
     "timestamp",
     "chain",
 )
-_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 @dataclass(frozen=True)
@@ -50,14 +49,14 @@ def _validate(row: dict) -> tuple[Transaction | None, str | None]:
 
     timestamp = row["timestamp"]
     try:
-        parsed = datetime.strptime(timestamp, _TIMESTAMP_FORMAT)
+        parsed = datetime.strptime(timestamp, TIMESTAMP_FORMAT)
     except (ValueError, TypeError):
         return None, f"timestamp must be ISO 8601 UTC, got {timestamp!r}"
     # strptime alone accepts unpadded values like "2026-8-1T5:0:0Z". Everything
     # downstream compares timestamps lexicographically on the stored text, so an
     # unpadded value would sort and range-filter wrongly forever after. Confirm
     # the parsed value re-formats back to exactly what was given.
-    if parsed.strftime(_TIMESTAMP_FORMAT) != timestamp:
+    if parsed.strftime(TIMESTAMP_FORMAT) != timestamp:
         return None, (
             "timestamp must be zero-padded ISO 8601 UTC (YYYY-MM-DDTHH:MM:SSZ), "
             f"got {timestamp!r}"
