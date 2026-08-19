@@ -1,19 +1,59 @@
-"""Accuracy scoring for the cascade.
+"""Accuracy scoring for the cascade, using B-cubed.
 
-Ground truth is an INPUT, never an assumption. Real data arrives unlabeled; when
-that happens the same scorer runs against a hand-labeled sample instead, and the
-simulated run becomes a regression check.
+Ground truth is an INPUT, never an assumption. Real data arrives unlabeled;
+the same scorer then runs against a hand-labeled sample instead.
 
-Predicted labels never equal truth labels by string, so scoring compares cluster
-agreement: each predicted group is mapped to the majority true group among its
-members, and a transaction is correct when its true group matches.
+Predicted labels never equal truth labels by string, so scoring compares
+cluster agreement. B-cubed asks, per transaction:
+
+  precision - of the payments grouped WITH me, how many belong with me
+  recall    - of the payments that belong with me, how many got grouped with me
+
+This replaces majority-vote purity, which punished merging two payers but
+rewarded splitting one payer across several groups - asymmetric in our favour.
+
+Ungroupable transactions need no special case. Treat each as its own true
+group of one, and each uncategorized transaction as its own predicted group of
+one, and the right behavior falls out: correctly declining to guess scores
+perfectly, while sweeping a stranger into a cluster is heavily penalized.
 """
 
 import sqlite3
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
 
-from ledger.models import CONFIDENT, UNCATEGORIZED, UNGROUPABLE
+from ledger.models import (
+    CONFIDENT,
+    RULE_TIME_CLUSTER,
+    UNCATEGORIZED,
+    UNGROUPABLE,
+)
+
+# Pre-registered in docs/superpowers/specs/2026-08-19-ledger-v0.1a-design.md
+# and fixed on 2026-08-19, BEFORE any measurement was taken. They are constants
+# rather than judgment calls precisely so the result cannot be rationalized
+# once the number is known. Do not adjust them to fit an outcome.
+TIME_CLUSTER_THRESHOLD = 0.70
+CALIBRATION_THRESHOLD = 0.95
+
+
+@dataclass(frozen=True)
+class RuleMetrics:
+    """How one cascade rule performed, split by hazard exposure.
+
+    The split separates fragility from failure: a rule that stumbles only on
+    hazard cases works but is brittle, while one that also fails on ordinary
+    traffic is not earning its place.
+    """
+
+    rule: str
+    count: int
+    precision: float
+    recall: float
+    hazard_count: int
+    hazard_precision: float
+    ordinary_count: int
+    ordinary_precision: float
 
 
 @dataclass(frozen=True)
@@ -22,63 +62,104 @@ class EvaluationResult:
 
     precision: float
     recall: float
-    confident_accuracy: float
-    uncertain_accuracy: float
-    grouped_count: int
-    groupable_count: int
+    confident_precision: float
     confident_count: int
-    uncertain_count: int
+    declined_recall: float
+    declined_count: int
+    transaction_count: int
+    hazards_available: bool
+    per_rule: list[RuleMetrics]
 
 
-def _ratio(numerator: int, denominator: int) -> float:
-    return numerator / denominator if denominator else 0.0
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _expand_singletons(mapping: dict[str, str], sentinel: str) -> dict[str, str]:
+    """Give every sentinel-labelled item a group of its own.
+
+    An uncategorized transaction claims nothing, and an ungroupable one belongs
+    with nothing. Both are singletons, so B-cubed scores them without any
+    special-casing in the metric itself.
+    """
+    return {
+        key: (f"{sentinel}:{key}" if value == sentinel else value)
+        for key, value in mapping.items()
+    }
 
 
 def score(
     predicted: dict[str, str],
     truth: dict[str, str],
     tiers: dict[str, str],
+    rules: dict[str, str],
+    hazards: dict[str, str] | None = None,
 ) -> EvaluationResult:
     """Score predictions against ground truth. All dicts keyed by tx_hash."""
-    grouped = {
-        tx_hash: label
-        for tx_hash, label in predicted.items()
-        if label != UNCATEGORIZED and tx_hash in truth
-    }
+    scored = [h for h in predicted if h in truth]
+    pred = _expand_singletons(
+        {h: predicted[h] for h in scored}, UNCATEGORIZED
+    )
+    true = _expand_singletons({h: truth[h] for h in scored}, UNGROUPABLE)
 
-    members: dict[str, list[str]] = defaultdict(list)
-    for tx_hash, label in grouped.items():
-        members[label].append(tx_hash)
+    pred_members: dict[str, set[str]] = defaultdict(set)
+    true_members: dict[str, set[str]] = defaultdict(set)
+    for h, label in pred.items():
+        pred_members[label].add(h)
+    for h, group in true.items():
+        true_members[group].add(h)
 
-    majority: dict[str, str] = {
-        label: Counter(truth[h] for h in hashes).most_common(1)[0][0]
-        for label, hashes in members.items()
-    }
+    precision: dict[str, float] = {}
+    recall: dict[str, float] = {}
+    for h in scored:
+        shared = len(pred_members[pred[h]] & true_members[true[h]])
+        precision[h] = shared / len(pred_members[pred[h]])
+        recall[h] = shared / len(true_members[true[h]])
 
-    correct = {
-        tx_hash
-        for tx_hash, label in grouped.items()
-        if truth[tx_hash] != UNGROUPABLE and truth[tx_hash] == majority[label]
-    }
+    hazard_tags = hazards or {}
+    per_rule = []
+    for rule in sorted({rules.get(h, "none") for h in scored}):
+        members = [h for h in scored if rules.get(h, "none") == rule]
+        hazardous = [h for h in members if h in hazard_tags]
+        ordinary = [h for h in members if h not in hazard_tags]
+        per_rule.append(
+            RuleMetrics(
+                rule=rule,
+                count=len(members),
+                precision=_mean([precision[h] for h in members]),
+                recall=_mean([recall[h] for h in members]),
+                hazard_count=len(hazardous),
+                hazard_precision=_mean([precision[h] for h in hazardous]),
+                ordinary_count=len(ordinary),
+                ordinary_precision=_mean([precision[h] for h in ordinary]),
+            )
+        )
 
-    groupable = {h for h, t in truth.items() if t != UNGROUPABLE}
-    confident = [h for h, tier in tiers.items() if tier == CONFIDENT and h in grouped]
-    uncertain = [h for h, tier in tiers.items() if tier != CONFIDENT and h in grouped]
+    confident = [h for h in scored if tiers.get(h) == CONFIDENT]
+    declined = [h for h in scored if predicted[h] == UNCATEGORIZED]
 
     return EvaluationResult(
-        precision=_ratio(len(correct), len(grouped)),
-        recall=_ratio(len(correct & groupable), len(groupable)),
-        confident_accuracy=_ratio(
-            sum(1 for h in confident if h in correct), len(confident)
-        ),
-        uncertain_accuracy=_ratio(
-            sum(1 for h in uncertain if h in correct), len(uncertain)
-        ),
-        grouped_count=len(grouped),
-        groupable_count=len(groupable),
+        precision=_mean([precision[h] for h in scored]),
+        recall=_mean([recall[h] for h in scored]),
+        confident_precision=_mean([precision[h] for h in confident]),
         confident_count=len(confident),
-        uncertain_count=len(uncertain),
+        declined_recall=_mean([recall[h] for h in declined]),
+        declined_count=len(declined),
+        transaction_count=len(scored),
+        hazards_available=bool(hazard_tags),
+        per_rule=per_rule,
     )
+
+
+def time_cluster_verdict(result: EvaluationResult) -> tuple[float, bool] | None:
+    """Apply the pre-registered criterion. None when the rule never fired.
+
+    Returns (measured B-cubed precision, whether it clears the threshold).
+    """
+    for metrics in result.per_rule:
+        if metrics.rule == RULE_TIME_CLUSTER:
+            return metrics.precision, metrics.precision >= TIME_CLUSTER_THRESHOLD
+    return None
 
 
 def run_evaluate(conn: sqlite3.Connection) -> EvaluationResult | None:
@@ -89,40 +170,39 @@ def run_evaluate(conn: sqlite3.Connection) -> EvaluationResult | None:
     truth = {row["tx_hash"]: row["true_group"] for row in truth_rows}
 
     rows = conn.execute(
-        """SELECT t.tx_hash, c.category_label, c.confidence_tier
+        """SELECT t.tx_hash, c.category_label, c.confidence_tier, c.rule_matched
            FROM transactions t
            JOIN categorizations c ON c.transaction_id = t.id"""
     ).fetchall()
 
-    predicted = {row["tx_hash"]: row["category_label"] for row in rows}
-    tiers = {row["tx_hash"]: row["confidence_tier"] for row in rows}
-    return score(predicted, truth, tiers)
+    hazards = {
+        row["tx_hash"]: row["hazard"]
+        for row in conn.execute("SELECT tx_hash, hazard FROM hazards").fetchall()
+    }
+
+    return score(
+        predicted={row["tx_hash"]: row["category_label"] for row in rows},
+        truth=truth,
+        tiers={row["tx_hash"]: row["confidence_tier"] for row in rows},
+        rules={row["tx_hash"]: row["rule_matched"] for row in rows},
+        hazards=hazards or None,
+    )
 
 
 def render_evaluation(result: EvaluationResult) -> str:
-    """Render the metrics, with a warning when confidence carries no signal."""
-    lines = [
-        "Categorization accuracy",
-        "=======================",
-        "",
-        f"Precision:   {result.precision:.1%}"
-        f"   (of {result.grouped_count} grouped payments, how many landed in the right group)",
-        f"Recall:      {result.recall:.1%}"
-        f"   (of {result.groupable_count} groupable payments, how many we caught correctly)",
-        "",
-        "Calibration - does 'confident' actually mean confident?",
-        f"  Confident tier accuracy: {result.confident_accuracy:.1%}"
-        f"  ({result.confident_count} payments)",
-        f"  Uncertain tier accuracy: {result.uncertain_accuracy:.1%}"
-        f"  ({result.uncertain_count} payments)",
-    ]
-
-    if result.confident_count and result.confident_accuracy <= result.uncertain_accuracy:
-        lines += [
+    """Render the headline metrics."""
+    return "\n".join(
+        [
+            "Categorization accuracy (B-cubed)",
+            "=================================",
             "",
-            "  WARNING: the confident tier is no more accurate than the uncertain",
-            "  tier. The confidence signal is not meaningful - treat confident",
-            "  groupings as unverified until the cascade is retuned.",
+            f"Precision:   {result.precision:.1%}",
+            f"Recall:      {result.recall:.1%}",
+            "",
+            "Calibration - does 'confident' actually mean confident?",
+            f"  Confident tier precision: {result.confident_precision:.1%}"
+            f"  ({result.confident_count} payments)",
+            f"  Declined coverage:        {result.declined_recall:.1%}"
+            f"  ({result.declined_count} payments left uncategorized)",
         ]
-
-    return "\n".join(lines)
+    )
