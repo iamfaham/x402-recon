@@ -3,6 +3,7 @@ import pytest
 from ledger.evaluate import (
     CALIBRATION_THRESHOLD,
     TIME_CLUSTER_THRESHOLD,
+    render_evaluation,
     score,
     time_cluster_verdict,
 )
@@ -194,3 +195,50 @@ def test_time_cluster_verdict_is_none_when_rule_never_fired():
 def test_thresholds_are_the_pre_registered_values():
     assert TIME_CLUSTER_THRESHOLD == 0.70
     assert CALIBRATION_THRESHOLD == 0.95
+
+
+def test_render_names_the_headline_metrics():
+    text = render_evaluation(build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"}))
+    assert "Precision" in text
+    assert "Recall" in text
+    assert "Calibration" in text
+    assert "Declined coverage" in text
+
+
+def test_render_warns_below_the_calibration_threshold():
+    result = build(
+        {"a": "g1", "b": "g1", "c": "g1", "d": "g1"},
+        {"a": "X", "b": "X", "c": "Y", "d": "Z"},
+    )
+    assert result.confident_precision < CALIBRATION_THRESHOLD
+    assert "WARNING" in render_evaluation(result)
+
+
+def test_render_is_silent_above_the_calibration_threshold():
+    text = render_evaluation(build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"}))
+    assert "WARNING" not in text
+
+
+def test_render_prints_a_computed_time_cluster_verdict():
+    result = build(
+        {"a": "g1", "b": "g1", "c": "g1", "d": "g1"},
+        {"a": "X", "b": "X", "c": "Y", "d": "Z"},
+        rules=dict.fromkeys("abcd", RULE_TIME_CLUSTER),
+    )
+    text = render_evaluation(result)
+    assert "FAILS" in text
+    assert "0.70" in text
+
+
+def test_render_shows_per_rule_breakdown():
+    result = build(
+        {"a": "g1", "b": "g1"},
+        {"a": "X", "b": "X"},
+        rules=dict.fromkeys("ab", RULE_SENDER_MATCH),
+    )
+    assert RULE_SENDER_MATCH in render_evaluation(result)
+
+
+def test_render_omits_hazard_split_when_unavailable():
+    text = render_evaluation(build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"}))
+    assert "hazard" not in text.lower()

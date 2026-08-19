@@ -190,19 +190,59 @@ def run_evaluate(conn: sqlite3.Connection) -> EvaluationResult | None:
 
 
 def render_evaluation(result: EvaluationResult) -> str:
-    """Render the headline metrics."""
-    return "\n".join(
-        [
-            "Categorization accuracy (B-cubed)",
-            "=================================",
+    """Render the metrics, the per-rule breakdown, and the computed verdict."""
+    lines = [
+        "Categorization accuracy (B-cubed)",
+        "=================================",
+        "",
+        f"Precision:   {result.precision:.1%}"
+        f"   (of the payments grouped together, how many belonged together)",
+        f"Recall:      {result.recall:.1%}"
+        f"   (of the payments from one payer, how many were found)",
+        f"             scored over {result.transaction_count} payments",
+        "",
+        "Calibration - does 'confident' actually mean confident?",
+        f"  Confident tier precision: {result.confident_precision:.1%}"
+        f"  ({result.confident_count} payments,"
+        f" threshold {CALIBRATION_THRESHOLD:.0%})",
+        f"  Declined coverage:        {result.declined_recall:.1%}"
+        f"  ({result.declined_count} payments left uncategorized)",
+    ]
+
+    if (
+        result.confident_count
+        and result.confident_precision < CALIBRATION_THRESHOLD
+    ):
+        lines += [
             "",
-            f"Precision:   {result.precision:.1%}",
-            f"Recall:      {result.recall:.1%}",
-            "",
-            "Calibration - does 'confident' actually mean confident?",
-            f"  Confident tier precision: {result.confident_precision:.1%}"
-            f"  ({result.confident_count} payments)",
-            f"  Declined coverage:        {result.declined_recall:.1%}"
-            f"  ({result.declined_count} payments left uncategorized)",
+            "  WARNING: confident groupings fall below the calibration threshold.",
+            "  The tool is claiming more certainty than it has earned - treat",
+            "  confident groupings as unverified until the cascade is retuned.",
         ]
-    )
+
+    lines += ["", "Per rule", "--------"]
+    for metrics in result.per_rule:
+        lines.append(
+            f"  {metrics.rule:<14} precision {metrics.precision:6.1%}"
+            f"   recall {metrics.recall:6.1%}   ({metrics.count} payments)"
+        )
+        if result.hazards_available and metrics.count:
+            lines.append(
+                f"    {'hazard cases':<16} {metrics.hazard_precision:6.1%}"
+                f"  ({metrics.hazard_count})"
+                f"    {'ordinary':<10} {metrics.ordinary_precision:6.1%}"
+                f"  ({metrics.ordinary_count})"
+            )
+
+    verdict = time_cluster_verdict(result)
+    if verdict is not None:
+        precision, passes = verdict
+        outcome = "PASSES" if passes else "FAILS"
+        lines += [
+            "",
+            f"Pre-registered criterion: time_cluster B-cubed precision "
+            f"{precision:.1%} - {outcome} threshold "
+            f"{TIME_CLUSTER_THRESHOLD:.2f}",
+        ]
+
+    return "\n".join(lines)
