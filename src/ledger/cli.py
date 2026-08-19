@@ -10,9 +10,9 @@ from datetime import datetime
 from pathlib import Path
 
 from ledger.categorize import run_categorize
-from ledger.db import connect, init_schema
+from ledger.db import SchemaVersionError, connect, init_schema
 from ledger.evaluate import render_evaluation, run_evaluate
-from ledger.ingest import format_ingest_summary, ingest_from_dir
+from ledger.ingest import IngestError, format_ingest_summary, ingest_from_dir
 from ledger.report import build_report, render_summary, write_csv
 from ledger.simulate import generate_batch, write_batch
 
@@ -90,12 +90,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {path}")
         return 0
 
-    conn = connect(Path(args.db))
-    init_schema(conn)
+    try:
+        conn = connect(Path(args.db))
+        init_schema(conn)
+    except SchemaVersionError as exc:
+        print(f"Error: {exc}")
+        return 2
 
-    if args.command == "ingest":
-        print(format_ingest_summary(ingest_from_dir(conn, Path(args.source))))
-        return 0
+    try:
+        if args.command == "ingest":
+            print(format_ingest_summary(ingest_from_dir(conn, Path(args.source))))
+            return 0
+    except IngestError as exc:
+        print(f"Error: {exc}")
+        return 2
 
     if args.command == "categorize":
         print(f"Categorized {run_categorize(conn)} transactions.")

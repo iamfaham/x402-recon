@@ -133,3 +133,47 @@ def test_report_date_error_names_the_expected_format(tmp_path: Path, capsys):
         main(["--db", str(db), "report", "--from", "garbage", "--to", "2026-09-30"])
     err = capsys.readouterr().err
     assert "YYYY-MM-DD" in err
+
+
+def test_missing_source_directory_gives_a_clean_error(tmp_path: Path, capsys):
+    db = tmp_path / "l.db"
+    code = main(["--db", str(db), "ingest", "--from", str(tmp_path / "nope")])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "transactions.json" in captured.out + captured.err
+    assert "Traceback" not in captured.out + captured.err
+
+
+def test_malformed_source_json_gives_a_clean_error(tmp_path: Path, capsys):
+    db = tmp_path / "l.db"
+    source = tmp_path / "data"
+    source.mkdir()
+    (source / "transactions.json").write_text("{not json")
+
+    code = main(["--db", str(db), "ingest", "--from", str(source)])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "valid JSON" in captured.out + captured.err
+    assert "Traceback" not in captured.out + captured.err
+
+
+def test_stale_database_gives_a_clean_error(tmp_path: Path, capsys):
+    import sqlite3
+
+    db = tmp_path / "old.db"
+    raw = sqlite3.connect(db)
+    raw.execute("CREATE TABLE transactions (id INTEGER PRIMARY KEY)")
+    raw.commit()
+    raw.close()
+
+    code = main(["--db", str(db), "categorize"])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "out of date" in (captured.out + captured.err).lower()
+    assert "Traceback" not in captured.out + captured.err
+
+
+def test_simulate_writes_three_files(tmp_path: Path, capsys):
+    assert main(["simulate", "--out", str(tmp_path / "d"), "--count", "120"]) == 0
+    for name in ("transactions.json", "ground_truth.json", "hazards.json"):
+        assert (tmp_path / "d" / name).exists()

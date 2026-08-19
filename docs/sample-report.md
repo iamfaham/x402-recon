@@ -1,7 +1,8 @@
 # Sample report
 
 This is a real, unedited run of the Ledger pipeline against simulated data
-(seed 42, 120 transactions), generated with:
+(seed 42, 120 transactions requested; the simulator writes 143 transactions
+once refunds and hazard cases are included), generated with:
 
 ```bash
 uv run ledger simulate --out sample/data --count 120 --seed 42
@@ -17,26 +18,28 @@ uv run ledger --db sample/ledger.db evaluate
 Payments received, 2026-08-01 to 2026-09-30
 ===========================================
 
-Total received:     $16.495202  (120 payments)
-  Confidently identified: $13.708366
-  Needs review:           $2.786836
+Payments received:  $195.939028  (143 payments)
+Refunds issued:     $17.928226
+Net received:       $178.010802
 
-Breakdown by source
--------------------
-  agent:0x30877432d1026706d7e805da846a32c3bb81e3c2        $3.048011  (18 payments)
-  agent:0x5236bb4734865425feeaa4e2fe981b29ee11b922        $2.549794  (21 payments)
-  agent:0x208611c9ddc24829264ac29d7172d3e19530405f        $2.505478  (16 payments)
-  agent:0x36d240ea122158278dcecda0c30212b39929ecc0        $2.001587  (13 payments)
-  agent:0x1abdd370c191a4a741ce27d9c44a2f1c82cd44f6        $1.567651  (11 payments)
-  service:invoice-settlement                              $0.802639  (6 payments)
-  agent:0xbd8a88385a795572df6fe80d77ad740d11f1dcf3        $0.687395  (6 payments)
-  agent:0xbd8a8838ce76a5a0020d33eb7986102163324c53        $0.545811  (4 payments)
-  cluster:2026-08-09T16:04:04Z                            $0.832859  (7 payments)   [needs review]
-  cluster:2026-08-09T15:39:00Z                            $0.795089  (7 payments)   [needs review]
-  cluster:2026-08-09T15:16:34Z                             $0.62816  (6 payments)   [needs review]
-  cluster:2026-08-09T16:26:23Z                            $0.239327  (2 payments)   [needs review]
-  cluster:2026-08-09T15:02:54Z                            $0.164764  (2 payments)   [needs review]
-  Uncategorized                                           $0.126637  (1 payment)   [needs review]
+  Confidently identified: $144.538667
+  Needs review:           $33.472135
+
+Breakdown by source (net of refunds)
+------------------------------------
+  agent:0xa3a4419f4fe020864d3979317de23f0749d0b7d5       $25.130738  (20 payments)
+  agent:0x5163f631cf81b7206f2e1bdb1812926337c6675d       $23.206618  (15 payments)
+  agent:0x30877432d1026706d7e805da846a32c3bb81e3c2       $21.301404  (22 payments)
+  agent:0x2feb1f5b5833701071fbc451d7a7da82b31571c2       $17.695868  (15 payments)
+  agent:0xeacf44eee4a2dc7ca1e8250932616f0350867e2a       $16.642457  (10 payments)
+  agent:0xaca34a61b19926535aa98b3b4049bfda5364763d       $12.390873  (6 payments)
+  agent:0x8278dcecda0c30212b39929ecc0f574c949b0431        $9.651106  (13 payments)
+  service:invoice-settlement                              $7.161092  (6 payments)
+  service:monthly-usage                                    $5.86274  (5 payments)
+  agent:0xaca34a615a2384d5b5e7143c50f200529df4648e        $5.495771  (7 payments)
+  agent:0xf34f2a72accd77839232a63b4ac0916cdab473c0            $0.00  (2 payments)
+  cluster:2026-08-04T19:37:26Z                            $3.506467  (2 payments)   [needs review]
+  Uncategorized                                          $29.965668  (20 payments)   [needs review]
 
 Anything marked [needs review] could not be confidently matched to a
 single payer. Please confirm these before relying on the totals.
@@ -48,20 +51,34 @@ It is not tax or accounting advice.
 ## Accuracy summary (`ledger evaluate`)
 
 ```
-Categorization accuracy
-=======================
+Categorization accuracy (B-cubed)
+=================================
 
-Precision:   79.8%   (of 119 grouped payments, how many landed in the right group)
-Recall:      100.0%   (of 95 groupable payments, how many we caught correctly)
+Precision:   96.5%   (of the payments grouped together, how many belonged together)
+Recall:      100.0%   (of the payments from one payer, how many were found)
+             scored over 143 payments
 
 Calibration - does 'confident' actually mean confident?
-  Confident tier accuracy: 100.0%  (95 payments)
-  Uncertain tier accuracy: 0.0%  (24 payments)
+  Confident tier precision: 96.7%  (121 payments, threshold 95%)
+  Declined coverage:        100.0%  (20 payments left uncategorized)
+
+Per rule
+--------
+  memo_match     precision  63.6%   recall 100.0%   (11 payments)
+    hazard cases      63.6%  (11)    ordinary     0.0%  (0)
+  none           precision 100.0%   recall 100.0%   (20 payments)
+    hazard cases     100.0%  (20)    ordinary     0.0%  (0)
+  sender_match   precision 100.0%   recall 100.0%   (110 payments)
+    hazard cases     100.0%  (18)    ordinary   100.0%  (92)
+  time_cluster   precision  50.0%   recall 100.0%   (2 payments)
+    hazard cases      50.0%  (2)    ordinary     0.0%  (0)
+
+Pre-registered criterion: time_cluster B-cubed precision 50.0% - FAILS threshold 0.70
 ```
 
 ## Line-item CSV (`--csv`)
 
-The full CSV has a header row plus 120 data rows (one per transaction).
+The full CSV has a header row plus 143 data rows (one per transaction).
 [`docs/sample-report.csv`](./sample-report.csv) is an excerpt: the header
 plus the first 25 data rows, sorted by timestamp. It is not the complete
-file — see the command above to regenerate the full 120-row CSV locally.
+file — see the command above to regenerate the full 143-row CSV locally.

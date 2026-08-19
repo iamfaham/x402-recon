@@ -45,31 +45,51 @@ a guess, so rule 3 does not. Nothing is ever forced into a bucket.
 
 | Metric | Value |
 |---|---|
-| Precision | 79.8% |
-| Recall | 100.0% |
-| Confident tier accuracy | 100.0% |
-| Uncertain tier accuracy | 0.0% |
+| Precision (B-cubed) | 96.5% |
+| Recall (B-cubed) | 100.0% |
+| Confident tier precision | 96.7% |
+| Declined coverage | 100.0% |
 
-In plain terms: on every case in this test set, whenever the tool said it was
-confident, it was right. The two rules behind a confident label
-(`sender_match` and `memo_match`) only fire when there is real repeated
-evidence — the same sender or the same specific memo showing up more than
-once — and that evidence held up 100% of the time here. But this dataset does
-not yet contain the cases that would be needed to catch a confident rule
-being wrong — for example, two unrelated one-off payers who happen to share a
-specific memo. So the 100% confident-tier figure is not yet a strong claim;
-it is a clean result on the situations tested so far, not proof the confident
-rules can't be fooled. The "needs review" label is a different story: the one
-rule that can produce it, `time_cluster`, is a guess based on timing alone,
-and in this run that guess was wrong every time it fired. That is exactly why
-it is marked uncertain instead of confident — the tool is telling you not to
-trust it. The overall precision figure, 79.8%, looks lower than either tier
-on its own because it blends the confident results with the consistently
-wrong uncertain ones. The number to trust is the confident total in the
-report; the number to double-check by hand is the "needs review" total.
+**These numbers are not comparable to v0's.** v0 reported precision 79.8% and
+recall 100.0% using majority-vote purity, which rewarded splitting one payer
+across several groups while punishing merging two. v0.1a uses B-cubed, which
+penalizes both errors, and measures against a dataset built to catch the rules
+being wrong. A different number here reflects a different question being asked,
+not a regression or an improvement.
+
+Precision asks: of the payments grouped together, how many belonged together.
+Recall asks: of the payments from one payer, how many were found. Declined
+coverage asks what was given up by leaving payments uncategorized - without it,
+a tool could score perfect calibration by categorizing almost nothing.
 
 Calibration is the metric that matters most: if the confident tier is no more
 accurate than the uncertain tier, the confidence signal is meaningless.
+
+## Ground truth format
+
+`evaluate` needs to know the correct answer. The simulator writes it; for real
+transactions a human supplies it by hand.
+
+`ground_truth.json` maps each transaction hash to the payer it truly came from:
+
+```json
+{
+  "0xabc...": "acme-corp",
+  "0xdef...": "acme-corp",
+  "0x123...": "__ungroupable__"
+}
+```
+
+Group names are arbitrary labels - any stable string identifying one payer.
+Use `__ungroupable__` for a transaction that genuinely belongs to no group,
+such as a one-off payer never seen again. This matters: those transactions are
+excluded from coverage scoring, because failing to group them is correct
+behavior rather than a miss.
+
+`hazards.json` is written by the simulator only and is never required. It tags
+which transactions carry deliberate adversarial structure, so accuracy can be
+split between hazard cases and ordinary traffic. Real data has no such tags,
+and its absence is normal.
 
 ## Development
 
