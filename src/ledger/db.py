@@ -8,7 +8,7 @@ data.
 import sqlite3
 from pathlib import Path
 
-from ledger.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND, Transaction
+from ledger.models import TX_TYPE_PAYMENT, Transaction
 
 SCHEMA_VERSION = 2
 
@@ -17,7 +17,7 @@ class SchemaVersionError(RuntimeError):
     """Raised when an existing database was written by a different schema."""
 
 
-_SCHEMA = """
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS transactions (
     id                INTEGER PRIMARY KEY,
     tx_hash           TEXT    NOT NULL UNIQUE,
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     memo              TEXT,
     chain             TEXT    NOT NULL,
     raw_payload       TEXT    NOT NULL,
-    tx_type           TEXT    NOT NULL DEFAULT 'payment'
+    tx_type           TEXT    NOT NULL DEFAULT '{TX_TYPE_PAYMENT}'
 );
 
 CREATE TABLE IF NOT EXISTS categorizations (
