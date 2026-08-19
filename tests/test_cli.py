@@ -19,7 +19,7 @@ def test_full_pipeline_produces_a_report(tmp_path: Path, capsys):
     ) == 0
 
     captured = capsys.readouterr().out
-    assert "Total received" in captured
+    assert "Net received" in captured
     assert out.exists()
     assert len(out.read_text().splitlines()) >= 121  # header + 120 rows
 
@@ -94,7 +94,7 @@ def test_report_accepts_a_valid_zero_padded_date_range(tmp_path: Path, capsys):
         ["--db", str(db), "report", "--from", "2026-08-01", "--to", "2026-09-30"]
     )
     assert exit_code == 0
-    assert "Total received" in capsys.readouterr().out
+    assert "Net received" in capsys.readouterr().out
 
 
 def test_report_rejects_unpadded_date(tmp_path: Path, capsys):

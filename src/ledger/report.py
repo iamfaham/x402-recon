@@ -12,7 +12,14 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from ledger.categorize import CONFIDENT, UNCATEGORIZED
+from ledger.models import (
+    CONFIDENT,
+    RULE_NONE,
+    TX_TYPE_PAYMENT,
+    TX_TYPE_REFUND,
+    UNCATEGORIZED,
+    UNCERTAIN,
+)
 from ledger.money import format_usdc, micro_to_decimal
 
 
@@ -20,11 +27,12 @@ def _payments(count: int) -> str:
     """Pluralize the payment count so a lone entry reads as "1 payment"."""
     return "payment" if count == 1 else "payments"
 
-_SELECT_IN_RANGE = """
+_SELECT_IN_RANGE = f"""
 SELECT t.tx_hash, t.timestamp, t.sender_address, t.memo, t.amount_micro_usdc,
-       COALESCE(c.category_label, 'uncategorized')  AS category_label,
-       COALESCE(c.confidence_tier, 'uncertain')     AS confidence_tier,
-       COALESCE(c.rule_matched, 'none')             AS rule_matched
+       t.tx_type,
+       COALESCE(c.category_label, '{UNCATEGORIZED}')  AS category_label,
+       COALESCE(c.confidence_tier, '{UNCERTAIN}')     AS confidence_tier,
+       COALESCE(c.rule_matched, '{RULE_NONE}')        AS rule_matched
 FROM transactions t
 LEFT JOIN categorizations c ON c.transaction_id = t.id
 WHERE t.timestamp >= ? AND t.timestamp <= ?
@@ -37,15 +45,23 @@ def _bounds(start: str, end: str) -> tuple[str, str]:
     return f"{start}T00:00:00Z", f"{end}T23:59:59Z"
 
 
+def _signed(row) -> int:
+    """A refund moves money out, so it counts against the total."""
+    amount = row["amount_micro_usdc"]
+    return -amount if row["tx_type"] == TX_TYPE_REFUND else amount
+
+
 @dataclass(frozen=True)
 class CategoryLine:
-    """One row of the summary breakdown."""
+    """One row of the summary breakdown, with refunds netted out."""
 
     category_label: str
     confidence_tier: str
     rule_matched: str
     transaction_count: int
-    total_micro_usdc: int
+    gross_micro_usdc: int
+    refunded_micro_usdc: int
+    net_micro_usdc: int
 
 
 @dataclass(frozen=True)
@@ -56,7 +72,9 @@ class ReportData:
     end: str
     lines: list[CategoryLine]
     transaction_count: int
-    total_micro_usdc: int
+    gross_micro_usdc: int
+    refunded_micro_usdc: int
+    net_micro_usdc: int
     confident_micro_usdc: int
     uncertain_micro_usdc: int
 
@@ -65,20 +83,28 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
     """Aggregate categorized transactions for an inclusive date range."""
     rows = conn.execute(_SELECT_IN_RANGE, _bounds(start, end)).fetchall()
 
-    grouped: dict[tuple[str, str, str], list[int]] = {}
+    grouped: dict[tuple[str, str, str], list] = {}
     for row in rows:
         key = (row["category_label"], row["confidence_tier"], row["rule_matched"])
-        grouped.setdefault(key, []).append(row["amount_micro_usdc"])
+        grouped.setdefault(key, []).append(row)
 
     lines = [
         CategoryLine(
             category_label=label,
             confidence_tier=tier,
             rule_matched=rule,
-            transaction_count=len(amounts),
-            total_micro_usdc=sum(amounts),
+            transaction_count=len(members),
+            gross_micro_usdc=sum(
+                r["amount_micro_usdc"] for r in members
+                if r["tx_type"] == TX_TYPE_PAYMENT
+            ),
+            refunded_micro_usdc=sum(
+                r["amount_micro_usdc"] for r in members
+                if r["tx_type"] == TX_TYPE_REFUND
+            ),
+            net_micro_usdc=sum(_signed(r) for r in members),
         )
-        for (label, tier, rule), amounts in grouped.items()
+        for (label, tier, rule), members in grouped.items()
     ]
     # Confident groups first, then by size — uncategorized always sorts last so
     # it reads as the closing "still to account for" line.
@@ -86,23 +112,25 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
         key=lambda line: (
             line.category_label == UNCATEGORIZED,
             line.confidence_tier != CONFIDENT,
-            -line.total_micro_usdc,
+            -line.net_micro_usdc,
         )
     )
 
-    total = sum(row["amount_micro_usdc"] for row in rows)
-    confident = sum(
-        row["amount_micro_usdc"] for row in rows if row["confidence_tier"] == CONFIDENT
-    )
+    gross = sum(r["amount_micro_usdc"] for r in rows if r["tx_type"] == TX_TYPE_PAYMENT)
+    refunded = sum(r["amount_micro_usdc"] for r in rows if r["tx_type"] == TX_TYPE_REFUND)
+    confident = sum(_signed(r) for r in rows if r["confidence_tier"] == CONFIDENT)
+    net = gross - refunded
 
     return ReportData(
         start=start,
         end=end,
         lines=lines,
         transaction_count=len(rows),
-        total_micro_usdc=total,
+        gross_micro_usdc=gross,
+        refunded_micro_usdc=refunded,
+        net_micro_usdc=net,
         confident_micro_usdc=confident,
-        uncertain_micro_usdc=total - confident,
+        uncertain_micro_usdc=net - confident,
     )
 
 
@@ -121,13 +149,16 @@ def render_summary(data: ReportData) -> str:
         header,
         "=" * len(header),
         "",
-        f"Total received:     {format_usdc(data.total_micro_usdc)}"
+        f"Payments received:  {format_usdc(data.gross_micro_usdc)}"
         f"  ({data.transaction_count} {_payments(data.transaction_count)})",
+        f"Refunds issued:     {format_usdc(data.refunded_micro_usdc)}",
+        f"Net received:       {format_usdc(data.net_micro_usdc)}",
+        "",
         f"  Confidently identified: {format_usdc(data.confident_micro_usdc)}",
         f"  Needs review:           {format_usdc(data.uncertain_micro_usdc)}",
         "",
-        "Breakdown by source",
-        "-------------------",
+        "Breakdown by source (net of refunds)",
+        "------------------------------------",
     ]
 
     for line in data.lines:
@@ -138,7 +169,7 @@ def render_summary(data: ReportData) -> str:
         )
         marker = "" if line.confidence_tier == CONFIDENT else "   [needs review]"
         lines.append(
-            f"  {name:<48} {format_usdc(line.total_micro_usdc):>16}"
+            f"  {name:<48} {format_usdc(line.net_micro_usdc):>16}"
             f"  ({line.transaction_count} {_payments(line.transaction_count)}){marker}"
         )
 
@@ -167,6 +198,7 @@ def write_csv(conn: sqlite3.Connection, start: str, end: str, out_path: Path) ->
                 "sender_address",
                 "memo",
                 "amount_usdc",
+                "tx_type",
                 "category_label",
                 "confidence_tier",
                 "rule_matched",
@@ -180,6 +212,7 @@ def write_csv(conn: sqlite3.Connection, start: str, end: str, out_path: Path) ->
                     row["sender_address"],
                     row["memo"] or "",
                     f"{micro_to_decimal(row['amount_micro_usdc']):.6f}",
+                    row["tx_type"],
                     row["category_label"],
                     row["confidence_tier"],
                     row["rule_matched"],

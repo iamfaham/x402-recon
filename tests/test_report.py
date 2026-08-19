@@ -6,6 +6,7 @@ from pathlib import Path
 from ledger.categorize import run_categorize
 from ledger.db import connect, init_schema, load_transactions
 from ledger.ingest import ingest_from_dir
+from ledger.models import TX_TYPE_REFUND
 from ledger.money import usdc_to_micro
 from ledger.report import build_report, render_summary, write_csv
 
@@ -43,7 +44,7 @@ def test_report_totals_only_include_the_date_range(tmp_path: Path):
     data = build_report(conn, "2026-08-01", "2026-08-31")
 
     assert data.transaction_count == 3
-    assert data.total_micro_usdc == 3_500_000
+    assert data.net_micro_usdc == 3_500_000
 
 
 def test_report_includes_transactions_on_the_final_day(tmp_path: Path):
@@ -51,7 +52,7 @@ def test_report_includes_transactions_on_the_final_day(tmp_path: Path):
     data = build_report(conn, "2026-08-01", "2026-08-15")
 
     assert data.transaction_count == 3
-    assert data.total_micro_usdc == 3_500_000
+    assert data.net_micro_usdc == 3_500_000
 
 
 def test_report_excludes_the_day_after_the_range(tmp_path: Path):
@@ -59,7 +60,7 @@ def test_report_excludes_the_day_after_the_range(tmp_path: Path):
     data = build_report(conn, "2026-08-01", "2026-08-14")
 
     assert data.transaction_count == 2
-    assert data.total_micro_usdc == 3_000_000
+    assert data.net_micro_usdc == 3_000_000
 
 
 def test_confident_and_uncertain_totals_split_and_sum_to_the_whole(tmp_path: Path):
@@ -68,7 +69,7 @@ def test_confident_and_uncertain_totals_split_and_sum_to_the_whole(tmp_path: Pat
 
     assert data.confident_micro_usdc == 3_000_000
     assert data.uncertain_micro_usdc == 500_000
-    assert data.confident_micro_usdc + data.uncertain_micro_usdc == data.total_micro_usdc
+    assert data.confident_micro_usdc + data.uncertain_micro_usdc == data.net_micro_usdc
 
 
 def test_summary_shows_uncategorized_money_explicitly(tmp_path: Path):
@@ -177,14 +178,14 @@ def test_grand_total_reconciles_across_summary_breakdown_csv_and_ingest(
     run_categorize(conn)
 
     data = build_report(conn, "2026-08-01", "2026-08-31")
-    breakdown_total = sum(line.total_micro_usdc for line in data.lines)
+    breakdown_total = sum(line.net_micro_usdc for line in data.lines)
 
     csv_path = tmp_path / "report.csv"
     write_csv(conn, "2026-08-01", "2026-08-31", csv_path)
     csv_rows = list(csv.DictReader(csv_path.read_text().splitlines()))
     csv_total_micro = sum(usdc_to_micro(row["amount_usdc"]) for row in csv_rows)
 
-    assert data.total_micro_usdc == ingested_total
+    assert data.net_micro_usdc == ingested_total
     assert breakdown_total == ingested_total
     assert csv_total_micro == ingested_total
 
@@ -232,3 +233,98 @@ def test_near_miss_addresses_receive_different_category_labels():
     assert labels_a, "expected near-miss group a to be present"
     assert labels_b, "expected near-miss group b to be present"
     assert labels_a.isdisjoint(labels_b)
+
+
+def seed_with_types(conn, rows):
+    for tx_hash, sender, memo, timestamp, amount, tx_type in rows:
+        conn.execute(
+            """INSERT INTO transactions
+               (tx_hash, sender_address, receiver_address, amount_micro_usdc,
+                timestamp, memo, chain, raw_payload, tx_type)
+               VALUES (?, ?, '0xm', ?, ?, ?, 'sim', '{}', ?)""",
+            (tx_hash, sender, amount, timestamp, memo, tx_type),
+        )
+    conn.commit()
+
+
+def refunded_db(tmp_path: Path):
+    conn = connect(tmp_path / "r.db")
+    init_schema(conn)
+    seed_with_types(
+        conn,
+        [
+            ("0x1", "0xa", None, "2026-08-10T10:00:00Z", 3_000_000, "payment"),
+            ("0x2", "0xa", None, "2026-08-10T10:01:00Z", 1_000_000, "payment"),
+            ("0x3", "0xa", None, "2026-08-11T10:00:00Z", 1_000_000, TX_TYPE_REFUND),
+        ],
+    )
+    run_categorize(conn)
+    return conn
+
+
+def test_gross_refunded_and_net_are_reported_separately(tmp_path: Path):
+    data = build_report(refunded_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert data.gross_micro_usdc == 4_000_000
+    assert data.refunded_micro_usdc == 1_000_000
+    assert data.net_micro_usdc == 3_000_000
+
+
+def test_net_equals_gross_minus_refunded(tmp_path: Path):
+    data = build_report(refunded_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert data.net_micro_usdc == data.gross_micro_usdc - data.refunded_micro_usdc
+
+
+def test_category_line_nets_its_own_refunds(tmp_path: Path):
+    data = build_report(refunded_db(tmp_path), "2026-08-01", "2026-08-31")
+    line = next(line for line in data.lines if line.category_label == "agent:0xa")
+    assert line.gross_micro_usdc == 4_000_000
+    assert line.refunded_micro_usdc == 1_000_000
+    assert line.net_micro_usdc == 3_000_000
+
+
+def test_summary_shows_all_three_figures(tmp_path: Path):
+    summary = render_summary(build_report(refunded_db(tmp_path), "2026-08-01", "2026-08-31"))
+    assert "$4.00" in summary
+    assert "$1.00" in summary
+    assert "$3.00" in summary
+    assert "refund" in summary.lower()
+
+
+def test_net_can_go_negative_and_renders_with_leading_sign(tmp_path: Path):
+    conn = connect(tmp_path / "n.db")
+    init_schema(conn)
+    seed_with_types(
+        conn,
+        [
+            ("0x1", "0xa", None, "2026-08-10T10:00:00Z", 1_000_000, "payment"),
+            ("0x2", "0xa", None, "2026-08-11T10:00:00Z", 2_500_000, TX_TYPE_REFUND),
+        ],
+    )
+    run_categorize(conn)
+
+    data = build_report(conn, "2026-08-01", "2026-08-31")
+    assert data.net_micro_usdc == -1_500_000
+    assert "-$1.50" in render_summary(data)
+
+
+def test_money_reconciles_with_refunds(tmp_path: Path):
+    conn = refunded_db(tmp_path)
+    out = tmp_path / "r.csv"
+    write_csv(conn, "2026-08-01", "2026-08-31", out)
+
+    ingested_net = conn.execute(
+        "SELECT SUM(CASE WHEN tx_type = 'refund' THEN -amount_micro_usdc "
+        "ELSE amount_micro_usdc END) AS n FROM transactions"
+    ).fetchone()["n"]
+
+    data = build_report(conn, "2026-08-01", "2026-08-31")
+    line_net = sum(line.net_micro_usdc for line in data.lines)
+
+    csv_net = 0
+    for row in csv.DictReader(out.read_text().splitlines()):
+        micro = usdc_to_micro(row["amount_usdc"])
+        csv_net += -micro if row["tx_type"] == "refund" else micro
+
+    assert data.net_micro_usdc == ingested_net
+    assert line_net == ingested_net
+    assert csv_net == ingested_net
