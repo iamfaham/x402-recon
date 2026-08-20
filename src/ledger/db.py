@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ledger.models import TX_TYPE_PAYMENT, Transaction
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class SchemaVersionError(RuntimeError):
@@ -32,11 +32,18 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 
 CREATE TABLE IF NOT EXISTS categorizations (
-    transaction_id  INTEGER PRIMARY KEY REFERENCES transactions(id),
-    category_label  TEXT NOT NULL,
-    confidence_tier TEXT NOT NULL,
-    rule_matched    TEXT NOT NULL,
-    categorized_at  TEXT NOT NULL
+    transaction_id  INTEGER NOT NULL REFERENCES transactions(id),
+    axis            TEXT    NOT NULL,
+    category_label  TEXT    NOT NULL,
+    confidence_tier TEXT    NOT NULL,
+    rule_matched    TEXT    NOT NULL,
+    categorized_at  TEXT    NOT NULL,
+    PRIMARY KEY (transaction_id, axis)
+);
+
+CREATE TABLE IF NOT EXISTS service_truth (
+    tx_hash      TEXT PRIMARY KEY,
+    true_service TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS ground_truth (

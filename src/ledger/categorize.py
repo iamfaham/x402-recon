@@ -149,10 +149,18 @@ def run_categorize(
 
     conn.executemany(
         """INSERT OR REPLACE INTO categorizations
-           (transaction_id, category_label, confidence_tier, rule_matched, categorized_at)
-           VALUES (?, ?, ?, ?, ?)""",
+           (transaction_id, axis, category_label, confidence_tier, rule_matched,
+            categorized_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
         [
-            (c.transaction_id, c.category_label, c.confidence_tier, c.rule_matched, c.categorized_at)
+            (
+                c.transaction_id,
+                c.axis,
+                c.category_label,
+                c.confidence_tier,
+                c.rule_matched,
+                c.categorized_at,
+            )
             for c in categorizations
         ],
     )
