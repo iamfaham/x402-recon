@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from ledger.config import DEFAULT_CONFIG, CascadeConfig
 from ledger.db import load_transactions
 from ledger.models import (
+    AXIS_PAYER,
     CONFIDENT,
     RULE_MEMO_MATCH,
     RULE_NONE,
@@ -124,6 +125,7 @@ def categorize_transactions(
         results.append(
             Categorization(
                 transaction_id=transaction.id,
+                axis=AXIS_PAYER,
                 category_label=label,
                 confidence_tier=tier,
                 rule_matched=rule,
