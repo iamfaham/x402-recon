@@ -173,6 +173,18 @@ def ingest_from_dir(conn: sqlite3.Connection, source_dir: Path) -> IngestResult:
             list(hazards.items()),
         )
 
+    service_truth_path = source_dir / "service_truth.json"
+    if service_truth_path.exists():
+        services = _load_json_file(
+            service_truth_path,
+            dict,
+            "a service_truth mapping of tx_hash to service name",
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO service_truth (tx_hash, true_service) VALUES (?, ?)",
+            list(services.items()),
+        )
+
     conn.commit()
     return IngestResult(inserted=inserted, skipped_duplicates=skipped, rejects=rejects)
 

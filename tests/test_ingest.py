@@ -243,3 +243,34 @@ def test_malformed_ground_truth_raises_ingest_error(tmp_path: Path):
     with pytest.raises(IngestError) as exc:
         ingest_from_dir(conn, source)
     assert "ground_truth" in str(exc.value)
+
+
+def test_service_truth_is_loaded_when_present(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(tmp_path, [valid_row("0x1")])
+    (source / "service_truth.json").write_text(json.dumps({"0x1": "weather-api"}))
+
+    ingest_from_dir(conn, source)
+
+    row = conn.execute("SELECT tx_hash, true_service FROM service_truth").fetchone()
+    assert row["true_service"] == "weather-api"
+
+
+def test_missing_service_truth_is_normal(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(tmp_path, [valid_row("0x1")])
+
+    result = ingest_from_dir(conn, source)
+
+    assert result.inserted == 1
+    assert conn.execute("SELECT COUNT(*) AS n FROM service_truth").fetchone()["n"] == 0
+
+
+def test_malformed_service_truth_raises_ingest_error(tmp_path: Path):
+    conn = fresh_conn(tmp_path)
+    source = write_source(tmp_path, [valid_row("0x1")])
+    (source / "service_truth.json").write_text(json.dumps(["not", "a", "mapping"]))
+
+    with pytest.raises(IngestError) as exc:
+        ingest_from_dir(conn, source)
+    assert "service_truth" in str(exc.value)
