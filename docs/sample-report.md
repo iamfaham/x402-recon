@@ -19,30 +19,44 @@ Payments received, 2026-08-01 to 2026-09-30
 ===========================================
 
 Payments received:  $185.9197  (137 payments)
-Refunds issued:     $9.851201  (8 refunds)
-Net received:       $176.068499
+Refunds issued:     $10.677028  (8 refunds)
+Net received:       $175.242672
 
-  Confidently identified: $150.62246
-  Needs review:           $25.446039
+  Confidently identified: $126.081426
+  Needs review:           $49.161246
 
-Breakdown by source (net of refunds)
-------------------------------------
+Who paid you (net of refunds)
+-----------------------------
   agent:0xa3a4419f4fe020864d3979317de23f0749d0b7d5       $25.917158  (19 payments, 2 refunds)
   agent:0x30877432d1026706d7e805da846a32c3bb81e3c2       $24.327816  (20 payments, 1 refund)
-  agent:0x5163f631cf81b7206f2e1bdb1812926337c6675d       $23.206618  (15 payments)
-  agent:0x2feb1f5b5833701071fbc451d7a7da82b31571c2       $17.678155  (15 payments, 2 refunds)
-  agent:0x8278dcecda0c30212b39929ecc0f574c949b0431       $12.558327  (11 payments, 1 refund)
-  service:reports                                        $11.074617  (4 payments)
-  agent:0xaca34a61b19926535aa98b3b4049bfda5364763d        $8.810276  (6 payments, 1 refund)
-  service:monthly-usage                                   $7.724616  (6 payments)
+  agent:0x5163f631cf81b7206f2e1bdb1812926337c6675d       $18.845364  (15 payments, 2 refunds)
+  agent:0x2feb1f5b5833701071fbc451d7a7da82b31571c2       $17.695868  (15 payments)
+  agent:0x8278dcecda0c30212b39929ecc0f574c949b0431       $15.196557  (11 payments)
+  agent:0xaca34a61b19926535aa98b3b4049bfda5364763d        $9.021302  (6 payments, 1 refund)
   agent:0x4daef485a962db5cc70072e6851cd842b530def3        $7.169687  (3 payments)
-  agent:0xaca34a615a2384d5b5e7143c50f200529df4648e        $4.811442  (6 payments, 1 refund)
-  service:report-api                                      $3.323097  (3 payments)
+  agent:0xaca34a615a2384d5b5e7143c50f200529df4648e        $5.495771  (6 payments, 1 refund)
   agent:0x8927965ead182ffdad3582bdae015e40c69a2357        $2.411903  (3 payments)
-  service:report-api-v2                                   $1.608748  (4 payments)
-  cluster:2026-08-03T06:08:05Z                             $2.54847  (1 payment)   [needs review]
+  agent:0xbd7a15101a69f83d58fba93304abbb786c234316            $0.00  (1 payment, 1 refund)
+  cluster:2026-08-04T12:14:39Z                           $11.074617  (4 payments)   [needs review]
+  cluster:2026-08-03T06:08:05Z                            $4.157218  (5 payments)   [needs review]
+  cluster:2026-08-09T15:51:09Z                            $3.323097  (3 payments)   [needs review]
   cluster:2026-08-08T11:49:10Z                            $0.176702  (1 payment)   [needs review]
-  Uncategorized                                          $22.720867  (20 payments)   [needs review]
+  Not identified                                         $30.429612  (25 payments)   [needs review]
+
+What they paid for (net of refunds)
+-----------------------------------
+  Grouped by the memo the payer sent. These groupings describe what was
+  bought; they are not a claim about who bought it.
+  service:search-api                                     $25.917158  (19 payments, 2 refunds)
+  service:weather-api                                    $24.327816  (20 payments, 1 refund)
+  service:llm-inference                                  $18.845364  (15 payments, 2 refunds)
+  service:data-feed                                      $14.517073  (12 payments, 2 refunds)
+  service:reports                                        $11.074617  (4 payments)
+  service:invoice-settlement                               $9.58159  (6 payments)
+  service:monthly-usage                                   $7.708745  (6 payments, 1 refund)
+  service:report-api                                      $3.323097  (3 payments)
+  service:report-api-v2                                   $1.608748  (4 payments)
+  No service identified                                  $58.338464  (48 payments)
 
 Anything marked [needs review] could not be confidently matched to a
 single payer. Please confirm these before relying on the totals.
@@ -51,92 +65,113 @@ This report organizes payment data you have already received.
 It is not tax or accounting advice.
 ```
 
-Note the `agent:0xa3a...` line: 19 payments and 2 refunds, reported as such
-rather than "(21 payments)" — the payment count is now reported against the
-gross figure and the refund count separately, so a payer who made one payment
-and received one refund back never reads as having made two payments (I5).
+Both breakdowns independently reconcile to the same net received
+($175.242672); each just partitions it along a different axis. The payer
+breakdown's "Not identified" and the service breakdown's "No service
+identified" are not the same set of transactions — a payment can have a
+confident payer and no service, or the reverse.
 
 ## Accuracy summary (`ledger evaluate`)
 
 ```
+Who paid you
+============
+
 Categorization accuracy (B-cubed)
 =================================
 
-Precision:   96.6%   (of the payments grouped together, how many belonged together)
+Precision:   98.9%   (of the payments grouped together, how many belonged together)
 Recall:      92.9%   (of the payments from one payer, how many were found)
              scored over 145 payments
 
 Calibration - does 'confident' actually mean confident?
-  Confident tier precision: 95.9%  (123 payments, threshold 95%)
-  Declined coverage:        100.0%  (20 payments left uncategorized)
+  Confident tier precision: 100.0%  (107 payments, threshold 95%)
+  Declined coverage:        100.0%  (25 payments left uncategorized)
 
 Per rule
 --------
-  memo_match     precision  70.6%   recall  57.2%   (17 payments)
-    hazard cases      70.6%  (17)    ordinary      n/a  (0)
-  none           precision 100.0%   recall 100.0%   (20 payments)
-    hazard cases     100.0%  (20)    ordinary      n/a  (0)
-  sender_match   precision 100.0%   recall  97.2%   (106 payments)
-    hazard cases     100.0%  (14)    ordinary   100.0%  (92)
-  time_cluster   precision 100.0%   recall 100.0%   (2 payments)
-    hazard cases     100.0%  (2)    ordinary      n/a  (0)
+  none           precision 100.0%   recall 100.0%   (25 payments)
+    hazard cases     100.0%  (25)    ordinary      n/a  (0)
+  sender_match   precision 100.0%   recall  97.2%   (107 payments)
+    hazard cases     100.0%  (15)    ordinary   100.0%  (92)
+  time_cluster   precision  87.7%   recall  44.1%   (13 payments)
+    hazard cases      87.7%  (13)    ordinary      n/a  (0)
 
-Pre-registered criterion: time_cluster B-cubed precision 100.0% on 2 payments - INSUFFICIENT DATA (need 20) - no verdict recorded
+Pre-registered criterion: time_cluster B-cubed precision 87.7% on 13 payments - INSUFFICIENT DATA (need 20) - no verdict recorded
+
+What they paid for
+==================
+
+These groupings describe what was bought, not who bought it, and
+claim no confidence. The figures below say how well grouping by the
+payer's memo matches the services actually purchased.
+
+Categorization accuracy (B-cubed)
+=================================
+
+Precision:   100.0%   (of the payments grouped together, how many belonged together)
+Recall:      95.0%   (of the payments from one payer, how many were found)
+             scored over 145 payments
+
+Calibration - does 'confident' actually mean confident?
+  Confident tier precision: 0.0%  (0 payments, threshold 95%)
+  Declined coverage:        100.0%  (48 payments left uncategorized)
+
+Per rule
+--------
+  memo_match     precision 100.0%   recall  92.5%   (97 payments)
+    hazard cases     100.0%  (31)    ordinary   100.0%  (66)
+  none           precision 100.0%   recall 100.0%   (48 payments)
+    hazard cases     100.0%  (22)    ordinary   100.0%  (26)
 ```
 
-Recall is now below 100% (92.9%) for the first time. This is the C1a fix
-working, not a regression: the rotating-address hazard now genuinely
-fragments one true payer into two predicted `sender_match` groups (each
-address appears twice, so `sender_match` fires on both halves), which
-B-cubed recall correctly penalizes. Under the old generator each rotating
-address appeared once, `sender_match` never fired on any of them, and the
-dataset contained zero fragmentation — 100% recall was a statement about the
-dataset, not the tool.
+### The finding this release exists to record
 
-`memo_match` now scores over 17 payments instead of 11: the memo-drift
-hazard's sender address no longer repeats, so `sender_match` no longer
-intercepts it, and `memo_match` sees (and is scored on) those transactions
-too (C1b).
+`memo_match` measured **70.6% B-cubed precision against payer ground truth**
+in v0.1a — a rule the old, single-axis cascade marked *confident*, folded
+straight into "Confidently identified" at face value. Scored against what it
+actually groups — service, not payer — `memo_match` now measures **100%
+precision**. The rule was never wrong. Only its presentation as a payer
+identity was: six unrelated payers who all bought `monthly-usage` were the
+same memo, not the same sender, and reporting them as one confidently
+identified payer was the defect.
 
-### The branch's strongest finding (I6)
+Service recall (95.0%) sits below 100% because exact-string memo matching
+fragments the memo-drift hazard's service into three separate memo strings.
+That is the measurement working as designed, not a regression: a service that
+genuinely changes its memo over time should not be silently merged back
+together by a tool that only compares exact strings.
 
-`memo_match` measured **70.6% B-cubed precision on 17 payments** — a rule
-the cascade marks *confident*. That means roughly three in ten payments this
-rule groups together are grouped wrong, yet they are folded into the
-headline "Confidently identified" total ($150.62) at face value. The
-aggregate confident-tier figure, 95.9%, clears the pre-registered 0.95 gate
-only because `sender_match`'s 106 easy, unambiguous cases dilute
-`memo_match`'s much weaker 70.6%. A cascade that reported confident-tier
-accuracy per rule, rather than blended, would show this immediately; the
-blended figure currently hides it. This is the result v0 (majority-vote
-purity, no per-rule split) was structurally incapable of producing, and it
-matters more than where the `time_cluster` verdict lands.
+The payer axis, cleanly separated from service grouping, now has exactly one
+confident rule — `sender_match` — measuring 100% confident-tier precision
+over 107 payments. No confident rule fails calibration on either axis; the
+service axis has no confident rules to fail, because both of its rules
+(`memo_match`, `none`) are descriptive by construction and are never held to
+the 0.95 floor.
 
-### time_cluster verdict: a distribution, not one draw
+### time_cluster after the split
 
-The pre-registered criterion (B-cubed precision >= 0.70) applies only when
-`time_cluster` has fired on enough transactions to mean something. A
-one-off sweep of seeds 1-40 (`count=120`, same hazard configuration as
-above) shows why a single seed's verdict cannot be trusted on its own:
+Splitting the two axes changed which transactions fall through to
+`time_cluster`: the memo-drift hazard that `memo_match` used to intercept (on
+the old, single payer/service cascade) no longer competes with it on the
+payer axis, since `memo_match` is now service-only. `time_cluster` fired on
+**13** payments this run, measuring **87.7%** B-cubed precision — above the
+pre-registered 0.70 threshold — but the run still prints `INSUFFICIENT DATA`
+because 13 is below `MIN_VERDICT_SAMPLE` (20). The rule would pass; it simply
+has not fired often enough for that pass to be trustworthy. This is the C2a
+gate working as designed, not a regression from the v0.1a distribution
+documented below.
 
-- `time_cluster` fired at all in **16 of 40 seeds** (24 seeds: the rule
-  never matched anything, so no verdict is even attempted).
-- Of the 16 seeds where it fired: **13 PASS**, **3 FAIL** against the 0.70
-  threshold.
-- Sample size (`n`) ranged **1-5** across every seed it fired in.
-
-Every one of those `n` values is below `MIN_VERDICT_SAMPLE` (20), so under
-the C2a gate, every seed in this sweep — including seed 42 above — would
-print `INSUFFICIENT DATA`, never a bare `PASSES`/`FAILS`. That is the fix
-working as intended: with the current hazard density, `time_cluster` simply
-does not fire often enough for its precision to be measured reliably, and
-the tool now says so instead of asserting a verdict that seed selection
-alone could flip. This sweep was run with a throwaway script, not committed;
-it exists to document the distribution v0.1b inherits.
+The prior sweep across seeds 1-40 (documented in the v0.1a measurement, not
+re-run here) still describes the shape of the problem: `time_cluster` fires
+rarely and at low sample sizes, so any single seed's verdict — including this
+one — should be read as one draw from a distribution, not a settled result.
 
 ## Line-item CSV (`--csv`)
 
 The full CSV has a header row plus 145 data rows (one per transaction).
 [`docs/sample-report.csv`](./sample-report.csv) is an excerpt: the header
-plus the first 25 data rows, sorted by timestamp. It is not the complete
-file — see the command above to regenerate the full 145-row CSV locally.
+plus the first 25 data rows, sorted by timestamp. It carries both axes'
+labels per row (`payer_label`/`payer_tier`/`payer_rule` and
+`service_label`/`service_rule`). It is not the complete file — see the
+command above to regenerate the full 145-row CSV locally.

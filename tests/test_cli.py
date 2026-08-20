@@ -173,7 +173,56 @@ def test_stale_database_gives_a_clean_error(tmp_path: Path, capsys):
     assert "Traceback" not in captured.out + captured.err
 
 
-def test_simulate_writes_three_files(tmp_path: Path, capsys):
+def test_simulate_writes_four_files(tmp_path: Path, capsys):
     assert main(["simulate", "--out", str(tmp_path / "d"), "--count", "120"]) == 0
-    for name in ("transactions.json", "ground_truth.json", "hazards.json"):
+    for name in (
+        "transactions.json", "ground_truth.json", "hazards.json", "service_truth.json"
+    ):
         assert (tmp_path / "d" / name).exists()
+
+
+def test_evaluate_renders_both_axes(tmp_path: Path, capsys):
+    db = tmp_path / "l.db"
+    data = tmp_path / "data"
+
+    main(["simulate", "--out", str(data), "--count", "120", "--seed", "42"])
+    main(["--db", str(db), "ingest", "--from", str(data)])
+    main(["--db", str(db), "categorize"])
+    capsys.readouterr()
+
+    assert main(["--db", str(db), "evaluate"]) == 0
+    out = capsys.readouterr().out
+    assert "Who paid you" in out
+    assert "What they paid for" in out
+
+
+def test_evaluate_without_service_truth_still_scores_the_payer_axis(tmp_path: Path, capsys):
+    # The real-data path: a human supplies payer truth alone.
+    db = tmp_path / "l.db"
+    data = tmp_path / "data"
+
+    main(["simulate", "--out", str(data), "--count", "120", "--seed", "42"])
+    (data / "service_truth.json").unlink()
+    main(["--db", str(db), "ingest", "--from", str(data)])
+    main(["--db", str(db), "categorize"])
+    capsys.readouterr()
+
+    assert main(["--db", str(db), "evaluate"]) == 0
+    out = capsys.readouterr().out
+    assert "Precision" in out
+    assert "unscored" in out.lower()
+
+
+def test_report_shows_both_breakdowns(tmp_path: Path, capsys):
+    db = tmp_path / "l.db"
+    data = tmp_path / "data"
+
+    main(["simulate", "--out", str(data), "--count", "120", "--seed", "42"])
+    main(["--db", str(db), "ingest", "--from", str(data)])
+    main(["--db", str(db), "categorize"])
+    capsys.readouterr()
+
+    main(["--db", str(db), "report", "--from", "2026-08-01", "--to", "2026-09-30"])
+    out = capsys.readouterr().out
+    assert "Who paid you" in out
+    assert "What they paid for" in out
