@@ -35,6 +35,22 @@ def test_ingested_count_meets_the_v0_bar(tmp_path: Path, capsys):
     assert "Rejected:            0" in captured
 
 
+def test_categorize_reports_transaction_count_not_row_count(tmp_path: Path, capsys):
+    # I2: run_categorize returns one row per axis per transaction (2 * N), so
+    # printing that number bare as "transactions" overstates it 2x. This pins
+    # the corrected wording, honestly reporting both figures.
+    db = tmp_path / "ledger.db"
+    data = tmp_path / "data"
+
+    main(["simulate", "--out", str(data), "--count", "120", "--seed", "1"])
+    main(["--db", str(db), "ingest", "--from", str(data)])
+    capsys.readouterr()
+
+    assert main(["--db", str(db), "categorize"]) == 0
+    captured = capsys.readouterr().out
+    assert "Categorized 130 transactions (260 rows across 2 axes)." in captured
+
+
 def test_evaluate_reports_metrics(tmp_path: Path, capsys):
     db = tmp_path / "ledger.db"
     data = tmp_path / "data"

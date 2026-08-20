@@ -4,6 +4,8 @@ from ledger.evaluate import (
     CALIBRATION_THRESHOLD,
     MIN_VERDICT_SAMPLE,
     TIME_CLUSTER_THRESHOLD,
+    AxisResults,
+    render_axis_results,
     render_evaluation,
     score,
     time_cluster_verdict,
@@ -364,3 +366,46 @@ def test_render_warns_naming_the_failing_rule():
     text = render_evaluation(score(predicted, truth, tiers, rules))
     assert "WARNING" in text
     assert RULE_MEMO_MATCH in text
+
+
+# --- I1: claims_confidence / render_axis_results ---------------------------
+
+
+def test_render_evaluation_omits_calibration_when_claims_confidence_is_false():
+    result = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
+    text = render_evaluation(result, claims_confidence=False)
+    assert "Calibration" not in text
+    assert "Confident tier precision" not in text
+
+
+def test_render_evaluation_still_shows_calibration_by_default():
+    result = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
+    text = render_evaluation(result)
+    assert "Calibration" in text
+    assert "Confident tier precision" in text
+
+
+def test_render_axis_results_shows_both_axis_headers_and_no_service_calibration():
+    payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
+    service = build({"a": "s1", "b": "s1"}, {"a": "S", "b": "S"})
+    text = render_axis_results(AxisResults(payer=payer, service=service))
+
+    assert "Who paid you" in text
+    assert "What they paid for" in text
+
+    # The service block must carry no calibration section at all.
+    service_block = text.split("What they paid for", 1)[1]
+    assert "Calibration" not in service_block
+    assert "Confident tier precision" not in service_block
+
+    # And the payer block (before the service section) still has one, since
+    # the payer axis claims confidence.
+    payer_block = text.split("What they paid for", 1)[0]
+    assert "Calibration" in payer_block
+    assert "Confident tier precision" in payer_block
+
+
+def test_render_axis_results_reports_service_axis_unscored_when_none():
+    payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
+    text = render_axis_results(AxisResults(payer=payer, service=None))
+    assert "service groupings are unscored" in text.lower()

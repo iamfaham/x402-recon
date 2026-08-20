@@ -247,25 +247,31 @@ def run_evaluate(conn: sqlite3.Connection) -> AxisResults | None:
     )
 
 
-def render_evaluation(result: EvaluationResult) -> str:
-    """Render the metrics, the per-rule breakdown, and the computed verdict."""
+def _render_evaluation_body(result: EvaluationResult, claims_confidence: bool) -> list[str]:
+    """Metrics, calibration (when claimed), per-rule breakdown, and verdict.
+
+    Split out from `render_evaluation` so `render_axis_results` can render the
+    service axis's body without also repeating the "Categorization accuracy
+    (B-cubed)" banner underneath its own "What they paid for" section header.
+    """
     lines = [
-        "Categorization accuracy (B-cubed)",
-        "=================================",
-        "",
         f"Precision:   {result.precision:.1%}"
         f"   (of the payments grouped together, how many belonged together)",
         f"Recall:      {result.recall:.1%}"
         f"   (of the payments from one payer, how many were found)",
         f"             scored over {result.transaction_count} payments",
-        "",
-        "Calibration - does 'confident' actually mean confident?",
-        f"  Confident tier precision: {result.confident_precision:.1%}"
-        f"  ({result.confident_count} payments,"
-        f" threshold {CALIBRATION_THRESHOLD:.0%})",
-        f"  Declined coverage:        {result.declined_recall:.1%}"
-        f"  ({result.declined_count} payments left uncategorized)",
     ]
+
+    if claims_confidence:
+        lines += [
+            "",
+            "Calibration - does 'confident' actually mean confident?",
+            f"  Confident tier precision: {result.confident_precision:.1%}"
+            f"  ({result.confident_count} payments,"
+            f" threshold {CALIBRATION_THRESHOLD:.0%})",
+            f"  Declined coverage:        {result.declined_recall:.1%}"
+            f"  ({result.declined_count} payments left uncategorized)",
+        ]
 
     failing = failing_confident_rules(result)
     if failing:
@@ -330,6 +336,24 @@ def render_evaluation(result: EvaluationResult) -> str:
                 f"{TIME_CLUSTER_THRESHOLD:.2f}",
             ]
 
+    return lines
+
+
+def render_evaluation(result: EvaluationResult, claims_confidence: bool = True) -> str:
+    """Render the banner, metrics, per-rule breakdown, and computed verdict.
+
+    `claims_confidence` controls whether the calibration block is shown at
+    all. A rule tier that claims no confidence (the service axis's
+    `memo_match`/`none`) has no calibration floor to be measured against, so
+    printing a 0.0% figure beside a zero count there reads as failure when it
+    means the section was never asked to clear a bar in the first place.
+    """
+    lines = [
+        "Categorization accuracy (B-cubed)",
+        "=================================",
+        "",
+    ]
+    lines += _render_evaluation_body(result, claims_confidence)
     return "\n".join(lines)
 
 
@@ -354,6 +378,9 @@ def render_axis_results(results: AxisResults) -> str:
             "claim no confidence. The figures below say how well grouping by the",
             "payer's memo matches the services actually purchased.",
             "",
-            render_evaluation(results.service),
         ]
+        # No nested "Categorization accuracy (B-cubed)" banner here: the
+        # section header above already names the axis, so repeating it would
+        # be a duplicated, redundant heading.
+        text += _render_evaluation_body(results.service, claims_confidence=False)
     return "\n".join(text)

@@ -83,6 +83,19 @@ above the pre-registered 0.70 threshold — but the run still reports
 `INSUFFICIENT DATA` because 13 is below `MIN_VERDICT_SAMPLE` (20). A rule can
 clear its bar and still not have fired enough to trust that result.
 
+**The service axis's 100.0% precision is currently near-tautological.** In
+this dataset, `service_truth` is derived from the memo for essentially every
+generator, and the only case where service truth and memo diverge — the
+memo-drift hazard — costs `memo_match` recall, never precision. No hazard here
+gives one memo string to two genuinely different services, which is the only
+thing that could push service precision below 100%. So right now only service
+**recall** is falsifiable; the precision figure has not been tested against an
+adversarial case built to break it. A `shared_memo_different_services` hazard
+is a precondition for treating a future service-axis precision figure — or any
+confidence claim on that axis — as earned rather than assumed. Building that
+hazard is next-release work: it would change the dataset and every published
+number again, so this release records the caveat instead.
+
 Full per-rule detail for both axes, including the complete `evaluate` output,
 is in [`docs/sample-report.md`](docs/sample-report.md).
 

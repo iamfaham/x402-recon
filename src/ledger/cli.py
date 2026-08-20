@@ -13,6 +13,7 @@ from ledger.categorize import run_categorize
 from ledger.db import SchemaVersionError, connect, init_schema
 from ledger.evaluate import render_axis_results, run_evaluate
 from ledger.ingest import IngestError, format_ingest_summary, ingest_from_dir
+from ledger.models import AXIS_COUNT
 from ledger.report import build_report, render_summary, write_csv
 from ledger.simulate import generate_batch, write_batch
 
@@ -106,7 +107,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.command == "categorize":
-        print(f"Categorized {run_categorize(conn)} transactions.")
+        row_count = run_categorize(conn)
+        transaction_count = row_count // AXIS_COUNT
+        print(
+            f"Categorized {transaction_count} transactions "
+            f"({row_count} rows across {AXIS_COUNT} axes)."
+        )
         return 0
 
     if args.command == "report":

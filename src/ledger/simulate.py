@@ -201,8 +201,8 @@ def generate_batch(
     _rotating_second_half = max(2, _rotating_total - _rotating_first_half)
     address_a = _address(rng)
     address_b = _address(rng)
-    for address, count in ((address_a, _rotating_first_half), (address_b, _rotating_second_half)):
-        for _ in range(count):
+    for address, share in ((address_a, _rotating_first_half), (address_b, _rotating_second_half)):
+        for _ in range(share):
             b.emit(
                 address,
                 "invoice-settlement",

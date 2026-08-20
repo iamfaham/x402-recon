@@ -1,8 +1,11 @@
 # Sample report
 
 This is a real, unedited run of the Ledger pipeline against simulated data
-(seed 42, 120 transactions requested; the simulator writes 145 transactions
-once refunds and hazard cases are included), generated with:
+(seed 42, `--count 120` requested; the simulator's fixed set of ordinary
+agents plus its hazard cases already produces 145 transactions on their own,
+before `--count` ever comes into play - `--count` only tops the dataset up
+with further untagged filler if the natural output falls short of it, which
+120 does not), generated with:
 
 ```bash
 uv run ledger simulate --out sample/data --count 120 --seed 42
@@ -106,16 +109,9 @@ These groupings describe what was bought, not who bought it, and
 claim no confidence. The figures below say how well grouping by the
 payer's memo matches the services actually purchased.
 
-Categorization accuracy (B-cubed)
-=================================
-
 Precision:   100.0%   (of the payments grouped together, how many belonged together)
 Recall:      95.0%   (of the payments from one payer, how many were found)
              scored over 145 payments
-
-Calibration - does 'confident' actually mean confident?
-  Confident tier precision: 0.0%  (0 payments, threshold 95%)
-  Declined coverage:        100.0%  (48 payments left uncategorized)
 
 Per rule
 --------
@@ -148,6 +144,26 @@ over 107 payments. No confident rule fails calibration on either axis; the
 service axis has no confident rules to fail, because both of its rules
 (`memo_match`, `none`) are descriptive by construction and are never held to
 the 0.95 floor.
+
+### Service precision is currently unfalsifiable
+
+The service axis's 100.0% precision above should not be read as a stronger
+result than the payer axis's 98.9%. In this dataset, `service_truth` is
+derived from the payment's memo for essentially every generator, and the only
+place service truth and memo diverge is the memo-drift hazard — one true
+service spread across three memo strings — which costs `memo_match` **recall**
+only, never precision. No hazard in this dataset gives one memo string to two
+genuinely different services, which is the only kind of case that could push
+service precision below 100%. That makes the current 100.0% figure
+near-tautological: it is close to guaranteed by how the data is built, not
+something the tool had to earn against an adversarial case. Only service
+**recall** is presently falsifiable. A `shared_memo_different_services`
+hazard — deliberately built, not implied by an existing one — is a
+precondition for treating any future service-axis precision figure as
+evidence of anything, and for any future confidence claim on that axis.
+Building it is out of scope for this release, since it would change the
+dataset and every published number again; this section records the caveat so
+the number is not read as more than it is.
 
 ### time_cluster after the split
 

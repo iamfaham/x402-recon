@@ -18,6 +18,17 @@ def test_generates_at_least_the_requested_count():
     assert len(generate_batch(count=120, seed=1).transactions) >= 120
 
 
+def test_generates_at_least_the_requested_count_above_the_natural_floor():
+    # The generator's fixed agent+hazard material already produces ~145
+    # transactions before the top-up loop is ever reached, so a `count` at or
+    # below that floor (e.g. 120 above) cannot exercise the top-up loop at
+    # all - it would pass identically whether or not that loop worked. Only a
+    # count above the natural floor forces the top-up loop to run, which is
+    # why this is the case that actually catches a shadowed loop variable
+    # (C1) breaking it.
+    assert len(generate_batch(count=300, seed=1).transactions) >= 300
+
+
 def test_is_deterministic_for_a_given_seed():
     a = generate_batch(count=120, seed=7)
     b = generate_batch(count=120, seed=7)

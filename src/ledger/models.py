@@ -37,6 +37,10 @@ DESCRIPTIVE = "descriptive"
 AXIS_PAYER = "payer"
 AXIS_SERVICE = "service"
 
+# Every transaction gets exactly one categorization row per axis, so the row
+# count returned by categorization is this many times the transaction count.
+AXIS_COUNT = len((AXIS_PAYER, AXIS_SERVICE))
+
 # The label given when no rule fired.
 UNCATEGORIZED = "uncategorized"
 
