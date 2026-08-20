@@ -48,7 +48,7 @@ def test_categorize_reports_transaction_count_not_row_count(tmp_path: Path, caps
 
     assert main(["--db", str(db), "categorize"]) == 0
     captured = capsys.readouterr().out
-    assert "Categorized 130 transactions (260 rows across 2 axes)." in captured
+    assert "Categorized 138 transactions (276 rows across 2 axes)." in captured
 
 
 def test_evaluate_reports_metrics(tmp_path: Path, capsys):

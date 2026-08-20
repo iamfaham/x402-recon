@@ -35,9 +35,18 @@ HAZARD_SHARED_MEMO = "shared_memo_strangers"
 HAZARD_ROTATING_ADDRESS = "rotating_address"
 HAZARD_MEMO_DRIFT = "memo_drift"
 HAZARD_REFUND = "refund"
+HAZARD_SHARED_MEMO_DIFFERENT_SERVICES = "shared_memo_different_services"
 
 # One service, three memo strings - the service axis's adversarial case.
 _DRIFT_SERVICE = "reporting"
+
+# One memo string, two genuinely different services - the inverse of memo
+# drift, and the only hazard shape that can reduce service precision. Drift
+# fragments (costing recall); this merges (costing precision). These service
+# names are used by no other generator, so the hazard's effect stays on its
+# own rows instead of depressing an existing service's recall.
+_SHARED_MEMO = "monthly-plan"
+_SHARED_MEMO_SERVICES = ("premium-weather", "premium-llm")
 
 # Ordinary recurring agents: (group, memo or None, burst count).
 _AGENTS = [
@@ -62,6 +71,7 @@ class HazardConfig:
 
     interleaved_one_offs: int = 22
     shared_memo_strangers: int = 6
+    shared_memo_different_services: int = 8
     rotating_address_payments: int = 6
     memo_drift_agents: int = 1
     refund_count: int = 8
@@ -243,6 +253,22 @@ def generate_batch(
             service="monthly-usage",
         )
 
+    # HAZARD: two recurring payers sending the same memo for different
+    # services. memo_match merges them; service truth says they belong apart.
+    # Their senders repeat, so sender_match claims them on the payer axis and
+    # time_cluster is left untouched - the hazard is payer-axis-neutral.
+    per_agent = max(2, hazards.shared_memo_different_services // 2)
+    for index, service in enumerate(_SHARED_MEMO_SERVICES):
+        sender = _address(rng)
+        b.burst(
+            sender,
+            _SHARED_MEMO,
+            f"agent-sharedmemo-{index}",
+            per_agent,
+            hazard=HAZARD_SHARED_MEMO_DIFFERENT_SERVICES,
+            service=service,
+        )
+
     # HAZARD: one-off payers scattered across the window. Because everything
     # shares one timeline, these land inside real agent bursts — giving
     # time_cluster both plausible-but-wrong and plausible-and-right cases.
@@ -262,11 +288,16 @@ def generate_batch(
     # the whole point of the memo-drift hazard (C1b). Events with no true
     # service (e.g. the memo-less agent-scraper) are excluded too: a refund's
     # service is its original's service, and a refund is never ungroupable on
-    # the service axis by construction.
+    # the service axis by construction. Shared-memo-different-services
+    # transactions are excluded too: a refund would carry that hazard's
+    # service truth (premium-weather/premium-llm) but tagged HAZARD_REFUND
+    # instead, breaking the guarantee that those service names are used by
+    # no other generator.
     refundable = [
         e for e in b.events
         if e.true_group != UNGROUPABLE
         and e.hazard != HAZARD_MEMO_DRIFT
+        and e.hazard != HAZARD_SHARED_MEMO_DIFFERENT_SERVICES
         and e.service != UNGROUPABLE
     ]
     for original in rng.sample(refundable, min(hazards.refund_count, len(refundable))):

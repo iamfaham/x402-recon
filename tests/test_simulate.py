@@ -360,3 +360,61 @@ def test_write_batch_writes_all_four_files(tmp_path: Path):
     assert st_path.exists()
     assert st_path.name == "service_truth.json"
     assert json.loads(st_path.read_text()) == batch.service_truth
+
+
+from ledger.simulate import HAZARD_SHARED_MEMO_DIFFERENT_SERVICES
+
+
+def _shared_memo_diff_services(batch):
+    return [
+        t for t in batch.transactions
+        if batch.hazards.get(t.tx_hash) == HAZARD_SHARED_MEMO_DIFFERENT_SERVICES
+    ]
+
+
+def test_one_memo_covers_two_different_services():
+    # The only hazard shape that can reduce service precision: a MERGE.
+    # Every other generator derives service truth from the memo, so memo and
+    # service agree and precision cannot fall.
+    batch = generate_batch(count=120, seed=1)
+    tagged = _shared_memo_diff_services(batch)
+
+    assert len(tagged) >= 4
+    assert len({t.memo for t in tagged}) == 1
+    assert len({batch.service_truth[t.tx_hash] for t in tagged}) >= 2
+
+
+def test_its_true_services_are_used_by_nothing_else():
+    # Reusing an existing service would enlarge that service's true group and
+    # depress the recall of unrelated transactions, spreading the hazard's
+    # effect instead of isolating it to precision.
+    batch = generate_batch(count=120, seed=1)
+    tagged = _shared_memo_diff_services(batch)
+    hazard_services = {batch.service_truth[t.tx_hash] for t in tagged}
+
+    others = {
+        batch.service_truth[t.tx_hash]
+        for t in batch.transactions
+        if batch.hazards.get(t.tx_hash) != HAZARD_SHARED_MEMO_DIFFERENT_SERVICES
+    }
+    assert hazard_services.isdisjoint(others)
+
+
+def test_it_is_payer_axis_neutral():
+    # Its senders repeat, so sender_match claims them and time_cluster - the
+    # rule this release decides - is untouched by the hazard's presence.
+    from collections import Counter
+
+    batch = generate_batch(count=120, seed=1)
+    tagged = _shared_memo_diff_services(batch)
+    counts = Counter(t.sender_address for t in batch.transactions)
+
+    assert tagged
+    for tx in tagged:
+        assert counts[tx.sender_address] >= 2
+
+
+def test_its_payers_are_genuinely_different():
+    batch = generate_batch(count=120, seed=1)
+    tagged = _shared_memo_diff_services(batch)
+    assert len({batch.ground_truth[t.tx_hash] for t in tagged}) >= 2
