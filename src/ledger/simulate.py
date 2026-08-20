@@ -36,6 +36,9 @@ HAZARD_ROTATING_ADDRESS = "rotating_address"
 HAZARD_MEMO_DRIFT = "memo_drift"
 HAZARD_REFUND = "refund"
 
+# One service, three memo strings - the service axis's adversarial case.
+_DRIFT_SERVICE = "reporting"
+
 # Ordinary recurring agents: (group, memo or None, burst count).
 _AGENTS = [
     ("agent-weather", "weather-api", 3),
@@ -74,6 +77,7 @@ class SimulatedBatch:
     transactions: list[Transaction]
     ground_truth: dict[str, str]
     hazards: dict[str, str]
+    service_truth: dict[str, str]
 
 
 @dataclass
@@ -82,6 +86,7 @@ class _Event:
     transaction: Transaction
     true_group: str
     hazard: str | None
+    service: str
 
 
 def _iso(moment: datetime) -> str:
@@ -120,6 +125,7 @@ class _Builder:
         hazard: str | None = None,
         tx_type: str = TX_TYPE_PAYMENT,
         amount: int | None = None,
+        service: str = UNGROUPABLE,
     ) -> Transaction:
         tx_hash = "0x" + "".join(
             self.rng.choice("0123456789abcdef") for _ in range(64)
@@ -135,7 +141,7 @@ class _Builder:
             raw_payload=json.dumps({"protocol": "x402", "simulated": True}),
             tx_type=tx_type,
         )
-        self.events.append(_Event(moment, transaction, group, hazard))
+        self.events.append(_Event(moment, transaction, group, hazard, service))
         return transaction
 
     def burst(
@@ -145,13 +151,14 @@ class _Builder:
         group: str,
         size: int,
         hazard: str | None = None,
+        service: str = UNGROUPABLE,
     ) -> list[Transaction]:
         """One session: several payments minutes apart, placed anywhere."""
         moment = _somewhere_in_window(self.rng)
         made = []
         for _ in range(size):
             moment += timedelta(seconds=self.rng.randint(5, 120))
-            made.append(self.emit(sender, memo, group, moment, hazard))
+            made.append(self.emit(sender, memo, group, moment, hazard, service=service))
         return made
 
 
@@ -168,13 +175,20 @@ def generate_batch(
     # expected to get right.
     for group, memo, bursts in _AGENTS:
         sender = _address(rng)
+        service = memo if memo and memo not in _GENERIC_MEMOS else UNGROUPABLE
         for _ in range(bursts):
-            b.burst(sender, memo, group, rng.randint(4, 9))
+            b.burst(sender, memo, group, rng.randint(4, 9), service=service)
 
     # Near-miss pair: distinct agents whose addresses share a prefix.
     shared_prefix = "0x" + "".join(rng.choice("0123456789abcdef") for _ in range(8))
     for group in ("agent-nearmiss-a", "agent-nearmiss-b"):
-        b.burst(_address(rng, prefix=shared_prefix), "data-feed", group, rng.randint(3, 6))
+        b.burst(
+            _address(rng, prefix=shared_prefix),
+            "data-feed",
+            group,
+            rng.randint(3, 6),
+            service="data-feed",
+        )
 
     # HAZARD: an agent rotating its address mid-life. It uses address A for
     # several payments, then switches to address B for several more. Each
@@ -195,6 +209,7 @@ def generate_batch(
                 "agent-rotating",
                 _somewhere_in_window(rng),
                 hazard=HAZARD_ROTATING_ADDRESS,
+                service="invoice-settlement",
             )
 
     # HAZARD: memo drift. One payer, but its address rotates so no address
@@ -207,7 +222,14 @@ def generate_batch(
             moment = _somewhere_in_window(rng)
             for _ in range(rng.randint(2, 4)):
                 moment += timedelta(seconds=rng.randint(5, 120))
-                b.emit(_address(rng), memo, group, moment, hazard=HAZARD_MEMO_DRIFT)
+                b.emit(
+                    _address(rng),
+                    memo,
+                    group,
+                    moment,
+                    hazard=HAZARD_MEMO_DRIFT,
+                    service=_DRIFT_SERVICE,
+                )
 
     # HAZARD: strangers sharing one specific memo. memo_match will collapse
     # them; ground truth says they are different payers.
@@ -218,6 +240,7 @@ def generate_batch(
             f"agent-stranger-{i}",
             _somewhere_in_window(rng),
             hazard=HAZARD_SHARED_MEMO,
+            service="monthly-usage",
         )
 
     # HAZARD: one-off payers scattered across the window. Because everything
@@ -236,10 +259,15 @@ def generate_batch(
     # Memo-drift transactions are excluded: a refund reuses its original's
     # sender address, and doing that for a memo-drift payment would make that
     # one address repeat - letting sender_match intercept it and defeating
-    # the whole point of the memo-drift hazard (C1b).
+    # the whole point of the memo-drift hazard (C1b). Events with no true
+    # service (e.g. the memo-less agent-scraper) are excluded too: a refund's
+    # service is its original's service, and a refund is never ungroupable on
+    # the service axis by construction.
     refundable = [
         e for e in b.events
-        if e.true_group != UNGROUPABLE and e.hazard != HAZARD_MEMO_DRIFT
+        if e.true_group != UNGROUPABLE
+        and e.hazard != HAZARD_MEMO_DRIFT
+        and e.service != UNGROUPABLE
     ]
     for original in rng.sample(refundable, min(hazards.refund_count, len(refundable))):
         b.emit(
@@ -250,6 +278,7 @@ def generate_batch(
             hazard=HAZARD_REFUND,
             tx_type=TX_TYPE_REFUND,
             amount=original.transaction.amount_micro_usdc,
+            service=original.service,
         )
 
     # Top up with further ungroupable one-offs until the requested size. This
@@ -276,15 +305,17 @@ def generate_batch(
         hazards={
             e.transaction.tx_hash: e.hazard for e in b.events if e.hazard is not None
         },
+        service_truth={e.transaction.tx_hash: e.service for e in b.events},
     )
 
 
-def write_batch(batch: SimulatedBatch, out_dir: Path) -> tuple[Path, Path, Path]:
-    """Write transactions.json, ground_truth.json, and hazards.json."""
+def write_batch(batch: SimulatedBatch, out_dir: Path) -> tuple[Path, Path, Path, Path]:
+    """Write transactions.json, ground_truth.json, hazards.json, service_truth.json."""
     out_dir.mkdir(parents=True, exist_ok=True)
     tx_path = out_dir / "transactions.json"
     gt_path = out_dir / "ground_truth.json"
     hz_path = out_dir / "hazards.json"
+    st_path = out_dir / "service_truth.json"
 
     # Written ordered by tx_hash, not timestamp. tx_hash is random and
     # uncorrelated with time, so the JSON on disk is deliberately NOT in
@@ -314,4 +345,5 @@ def write_batch(batch: SimulatedBatch, out_dir: Path) -> tuple[Path, Path, Path]
     )
     gt_path.write_text(json.dumps(batch.ground_truth, indent=2))
     hz_path.write_text(json.dumps(batch.hazards, indent=2))
-    return tx_path, gt_path, hz_path
+    st_path.write_text(json.dumps(batch.service_truth, indent=2))
+    return tx_path, gt_path, hz_path, st_path

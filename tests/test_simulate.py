@@ -267,7 +267,7 @@ def test_every_hazard_tagged_transaction_exists():
 
 def test_write_batch_writes_all_three_files(tmp_path: Path):
     batch = generate_batch(count=120, seed=1)
-    tx_path, gt_path, hz_path = write_batch(batch, tmp_path)
+    tx_path, gt_path, hz_path, _ = write_batch(batch, tmp_path)
 
     assert tx_path.exists() and gt_path.exists() and hz_path.exists()
     txs = json.loads(tx_path.read_text())
@@ -288,9 +288,64 @@ def test_written_transactions_are_not_in_timestamp_order(tmp_path: Path):
     # on arrival order. batch.transactions itself stays timestamp-sorted
     # (see test_output_is_sorted_by_timestamp); only the written file differs.
     batch = generate_batch(count=120, seed=1)
-    tx_path, _, _ = write_batch(batch, tmp_path)
+    tx_path, _, _, _ = write_batch(batch, tmp_path)
     written = json.loads(tx_path.read_text())
     timestamps = [row["timestamp"] for row in written]
     assert timestamps != sorted(timestamps)
     tx_hashes = [row["tx_hash"] for row in written]
     assert tx_hashes == sorted(tx_hashes)
+
+
+def test_every_transaction_has_service_truth():
+    batch = generate_batch(count=120, seed=1)
+    for tx in batch.transactions:
+        assert tx.tx_hash in batch.service_truth
+
+
+def test_shared_memo_strangers_share_one_true_service():
+    # They are different payers but genuinely the same service. This grouping
+    # was never wrong - only its presentation as a payer identity was.
+    batch = generate_batch(count=120, seed=1)
+    tagged = [
+        t for t in batch.transactions
+        if batch.hazards.get(t.tx_hash) == HAZARD_SHARED_MEMO
+    ]
+    assert len(tagged) >= 2
+    assert len({batch.service_truth[t.tx_hash] for t in tagged}) == 1
+    assert len({batch.ground_truth[t.tx_hash] for t in tagged}) >= 2
+
+
+def test_memo_drift_is_one_true_service_under_several_memos():
+    batch = generate_batch(count=120, seed=1)
+    tagged = [
+        t for t in batch.transactions
+        if batch.hazards.get(t.tx_hash) == HAZARD_MEMO_DRIFT
+    ]
+    assert len(tagged) >= 2
+    assert len({batch.service_truth[t.tx_hash] for t in tagged}) == 1
+    assert len({t.memo for t in tagged}) >= 2
+
+
+def test_transactions_without_a_usable_memo_have_no_true_service():
+    batch = generate_batch(count=120, seed=1)
+    generic = {"", "payment", "x402", "n/a", "-", "none", "tx", "transfer"}
+    for tx in batch.transactions:
+        if tx.memo is None or tx.memo.strip().lower() in generic:
+            assert batch.service_truth[tx.tx_hash] == UNGROUPABLE
+
+
+def test_a_refund_carries_its_originals_service():
+    batch = generate_batch(count=120, seed=1)
+    refunds = [t for t in batch.transactions if t.tx_type == TX_TYPE_REFUND]
+    assert refunds
+    for refund in refunds:
+        assert batch.service_truth[refund.tx_hash] != UNGROUPABLE
+
+
+def test_write_batch_writes_all_four_files(tmp_path: Path):
+    batch = generate_batch(count=120, seed=1)
+    tx_path, gt_path, hz_path, st_path = write_batch(batch, tmp_path)
+
+    assert st_path.exists()
+    assert st_path.name == "service_truth.json"
+    assert json.loads(st_path.read_text()) == batch.service_truth
