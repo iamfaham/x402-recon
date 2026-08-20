@@ -18,7 +18,9 @@ from ledger.config import DEFAULT_CONFIG, CascadeConfig
 from ledger.db import load_transactions
 from ledger.models import (
     AXIS_PAYER,
+    AXIS_SERVICE,
     CONFIDENT,
+    DESCRIPTIVE,
     RULE_MEMO_MATCH,
     RULE_NONE,
     RULE_SENDER_MATCH,
@@ -90,34 +92,27 @@ def find_time_clusters(
     return clusters
 
 
-def categorize_transactions(
-    txns: list[Transaction],
-    config: CascadeConfig = DEFAULT_CONFIG,
-    now: str | None = None,
+def categorize_payers(
+    txns: list[Transaction], config: CascadeConfig, categorized_at: str
 ) -> list[Categorization]:
-    """Run the cascade over every transaction, in rule order."""
-    categorized_at = now or datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
+    """Answer 'who paid this' for every transaction.
 
+    Repetition of a sender address is evidence of identity, so sender_match
+    claims confidence. Proximity in time is a guess, so time_cluster does not.
+    A shared memo is deliberately NOT consulted here: it identifies a service,
+    not a payer, and treating it as identity is what let unrelated strangers be
+    reported as one payer.
+    """
     sender_counts = build_sender_counts(txns)
-    memo_counts = build_memo_counts(txns, config)
     clusters = find_time_clusters(txns, config)
 
-    results: list[Categorization] = []
+    results = []
     for transaction in txns:
         label, tier, rule = UNCATEGORIZED, UNCERTAIN, RULE_NONE
-
-        memo = None if transaction.memo is None else transaction.memo.strip()
 
         if sender_counts[transaction.sender_address] >= config.min_occurrences:
             label = f"agent:{transaction.sender_address}"
             tier, rule = CONFIDENT, RULE_SENDER_MATCH
-        elif (
-            not is_generic_memo(transaction.memo, config)
-            and memo is not None
-            and memo_counts[memo] >= config.min_occurrences
-        ):
-            label = f"service:{memo}"
-            tier, rule = CONFIDENT, RULE_MEMO_MATCH
         elif transaction.tx_hash in clusters:
             label = clusters[transaction.tx_hash]
             tier, rule = UNCERTAIN, RULE_TIME_CLUSTER
@@ -132,8 +127,56 @@ def categorize_transactions(
                 categorized_at=categorized_at,
             )
         )
-
     return results
+
+
+def categorize_services(
+    txns: list[Transaction], config: CascadeConfig, categorized_at: str
+) -> list[Categorization]:
+    """Answer 'what was this paid for' for every transaction.
+
+    Grouping is by exact memo string, which carries an inference - that the same
+    memo means the same service - so the result is measured. Until it is, every
+    row is DESCRIPTIVE: stated, not claimed.
+    """
+    memo_counts = build_memo_counts(txns, config)
+
+    results = []
+    for transaction in txns:
+        label, rule = UNCATEGORIZED, RULE_NONE
+        memo = None if transaction.memo is None else transaction.memo.strip()
+
+        if (
+            not is_generic_memo(transaction.memo, config)
+            and memo is not None
+            and memo_counts[memo] >= config.min_occurrences
+        ):
+            label = f"service:{memo}"
+            rule = RULE_MEMO_MATCH
+
+        results.append(
+            Categorization(
+                transaction_id=transaction.id,
+                axis=AXIS_SERVICE,
+                category_label=label,
+                confidence_tier=DESCRIPTIVE,
+                rule_matched=rule,
+                categorized_at=categorized_at,
+            )
+        )
+    return results
+
+
+def categorize_transactions(
+    txns: list[Transaction],
+    config: CascadeConfig = DEFAULT_CONFIG,
+    now: str | None = None,
+) -> list[Categorization]:
+    """Run both axes. Every transaction gets exactly one row per axis."""
+    categorized_at = now or datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
+    return categorize_payers(txns, config, categorized_at) + categorize_services(
+        txns, config, categorized_at
+    )
 
 
 def run_categorize(

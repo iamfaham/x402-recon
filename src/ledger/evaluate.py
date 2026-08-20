@@ -23,6 +23,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from ledger.models import (
+    AXIS_PAYER,
     CONFIDENT,
     RULE_TIME_CLUSTER,
     UNCATEGORIZED,
@@ -179,7 +180,8 @@ def run_evaluate(conn: sqlite3.Connection) -> EvaluationResult | None:
     rows = conn.execute(
         """SELECT t.tx_hash, c.category_label, c.confidence_tier, c.rule_matched
            FROM transactions t
-           JOIN categorizations c ON c.transaction_id = t.id"""
+           JOIN categorizations c ON c.transaction_id = t.id AND c.axis = ?""",
+        (AXIS_PAYER,),
     ).fetchall()
 
     hazards = {

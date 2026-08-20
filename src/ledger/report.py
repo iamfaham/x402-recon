@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ledger.models import (
+    AXIS_PAYER,
     CONFIDENT,
     RULE_NONE,
     TX_TYPE_PAYMENT,
@@ -39,7 +40,7 @@ SELECT t.tx_hash, t.timestamp, t.sender_address, t.memo, t.amount_micro_usdc,
        COALESCE(c.confidence_tier, '{UNCERTAIN}')     AS confidence_tier,
        COALESCE(c.rule_matched, '{RULE_NONE}')        AS rule_matched
 FROM transactions t
-LEFT JOIN categorizations c ON c.transaction_id = t.id
+LEFT JOIN categorizations c ON c.transaction_id = t.id AND c.axis = '{AXIS_PAYER}'
 WHERE t.timestamp >= ? AND t.timestamp <= ?
 ORDER BY t.timestamp, t.id
 """

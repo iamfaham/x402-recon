@@ -84,7 +84,8 @@ def by_hash(cats, txns):
 
 def test_repeated_sender_is_confident_sender_match():
     txns = [tx("0x1", "0xa"), tx("0x2", "0xa")]
-    result = by_hash(categorize_transactions(txns), txns)
+    payer = [c for c in categorize_transactions(txns) if c.axis == AXIS_PAYER]
+    result = by_hash(payer, txns)
 
     assert result["0x1"].rule_matched == RULE_SENDER_MATCH
     assert result["0x1"].confidence_tier == CONFIDENT
@@ -94,29 +95,40 @@ def test_repeated_sender_is_confident_sender_match():
 
 def test_single_sender_does_not_get_sender_match():
     txns = [tx("0x1", "0xa"), tx("0x2", "0xb")]
-    result = by_hash(categorize_transactions(txns), txns)
+    payer = [c for c in categorize_transactions(txns) if c.axis == AXIS_PAYER]
+    result = by_hash(payer, txns)
     assert result["0x1"].rule_matched != RULE_SENDER_MATCH
 
 
-def test_shared_memo_from_different_senders_is_confident_memo_match():
+def test_shared_memo_from_different_senders_is_descriptive_memo_match():
+    # Grouping by memo is a service signal, not a payer identity, so it now
+    # lands on the service axis and never claims CONFIDENT.
     txns = [
         tx("0x1", "0xa", memo="weather-api"),
         tx("0x2", "0xb", memo="weather-api"),
     ]
-    result = by_hash(categorize_transactions(txns), txns)
+    service = [c for c in categorize_transactions(txns) if c.axis == AXIS_SERVICE]
+    result = by_hash(service, txns)
 
     assert result["0x1"].rule_matched == RULE_MEMO_MATCH
-    assert result["0x1"].confidence_tier == CONFIDENT
+    assert result["0x1"].confidence_tier == DESCRIPTIVE
     assert result["0x1"].category_label == "service:weather-api"
 
 
-def test_sender_match_takes_priority_over_memo_match():
+def test_sender_match_and_memo_match_are_independent_axes():
+    # The two axes no longer compete in one elif chain: a repeated sender with
+    # a specific memo earns sender_match on the payer axis AND memo_match on
+    # the service axis, rather than one silently discarding the other.
     txns = [
         tx("0x1", "0xa", memo="weather-api"),
         tx("0x2", "0xa", memo="weather-api"),
     ]
-    result = by_hash(categorize_transactions(txns), txns)
-    assert result["0x1"].rule_matched == RULE_SENDER_MATCH
+    cats = categorize_transactions(txns)
+    payer = by_hash([c for c in cats if c.axis == AXIS_PAYER], txns)
+    service = by_hash([c for c in cats if c.axis == AXIS_SERVICE], txns)
+
+    assert payer["0x1"].rule_matched == RULE_SENDER_MATCH
+    assert service["0x1"].rule_matched == RULE_MEMO_MATCH
 
 
 def test_time_clustered_one_off_senders_are_uncertain():
@@ -125,7 +137,8 @@ def test_time_clustered_one_off_senders_are_uncertain():
         tx("0x2", "0xb", ts="2026-08-18T10:01:00Z"),
         tx("0x3", "0xc", ts="2026-08-18T10:02:00Z"),
     ]
-    result = by_hash(categorize_transactions(txns), txns)
+    payer = [c for c in categorize_transactions(txns) if c.axis == AXIS_PAYER]
+    result = by_hash(payer, txns)
 
     assert result["0x1"].rule_matched == RULE_TIME_CLUSTER
     assert result["0x1"].confidence_tier == UNCERTAIN
@@ -137,18 +150,12 @@ def test_isolated_transaction_is_uncategorized_not_forced_into_a_bucket():
         tx("0x1", "0xa", ts="2026-08-18T10:00:00Z"),
         tx("0x2", "0xb", ts="2026-08-18T18:00:00Z"),
     ]
-    result = by_hash(categorize_transactions(txns), txns)
+    payer = [c for c in categorize_transactions(txns) if c.axis == AXIS_PAYER]
+    result = by_hash(payer, txns)
 
     assert result["0x1"].rule_matched == RULE_NONE
     assert result["0x1"].category_label == UNCATEGORIZED
     assert result["0x1"].confidence_tier == UNCERTAIN
-
-
-def test_every_transaction_receives_exactly_one_categorization():
-    txns = [tx("0x1", "0xa"), tx("0x2", "0xa"), tx("0x3", "0xz", ts="2026-08-19T03:00:00Z")]
-    cats = categorize_transactions(txns)
-    assert len(cats) == len(txns)
-    assert len({c.transaction_id for c in cats}) == len(txns)
 
 
 def test_find_time_clusters_ignores_gaps_beyond_the_window():
@@ -178,7 +185,99 @@ def test_run_categorize_is_idempotent(tmp_path):
     first = run_categorize(conn)
     second = run_categorize(conn)
 
-    assert first == 2
-    assert second == 2
+    assert first == 4
+    assert second == 4
     count = conn.execute("SELECT COUNT(*) AS n FROM categorizations").fetchone()["n"]
-    assert count == 2
+    assert count == 4
+
+
+from ledger.categorize import categorize_payers, categorize_services
+from ledger.models import AXIS_PAYER, AXIS_SERVICE, DESCRIPTIVE
+
+
+def by_axis(cats):
+    return {c.axis: c for c in cats}
+
+
+def test_a_known_sender_with_a_specific_memo_gets_both_labels():
+    # THE BUG THIS RELEASE UNDOES: the old elif chain gave this transaction
+    # only the payer label and silently discarded the service.
+    txns = [
+        tx("0x1", "0xa", memo="weather-api"),
+        tx("0x2", "0xa", memo="weather-api"),
+    ]
+    first = by_axis([c for c in categorize_transactions(txns) if c.transaction_id == 1])
+
+    assert first[AXIS_PAYER].category_label == "agent:0xa"
+    assert first[AXIS_PAYER].confidence_tier == CONFIDENT
+    assert first[AXIS_SERVICE].category_label == "service:weather-api"
+    assert first[AXIS_SERVICE].confidence_tier == DESCRIPTIVE
+
+
+def test_every_transaction_gets_exactly_one_row_per_axis():
+    txns = [tx("0x1", "0xa"), tx("0x2", "0xa"), tx("0x3", "0xb")]
+    cats = categorize_transactions(txns)
+
+    assert len(cats) == 2 * len(txns)
+    seen = {(c.transaction_id, c.axis) for c in cats}
+    assert len(seen) == 2 * len(txns)
+
+
+def test_memo_match_never_appears_on_the_payer_axis():
+    txns = [
+        tx("0x1", "0xa", memo="weather-api"),
+        tx("0x2", "0xb", memo="weather-api"),
+    ]
+    payer = [c for c in categorize_transactions(txns) if c.axis == AXIS_PAYER]
+    assert all(c.rule_matched != RULE_MEMO_MATCH for c in payer)
+
+
+def test_service_rows_never_claim_confidence():
+    txns = [
+        tx("0x1", "0xa", memo="weather-api"),
+        tx("0x2", "0xb", memo="weather-api"),
+        tx("0x3", "0xc"),
+    ]
+    service = [c for c in categorize_transactions(txns) if c.axis == AXIS_SERVICE]
+    assert service
+    assert all(c.confidence_tier == DESCRIPTIVE for c in service)
+
+
+def test_payer_axis_still_falls_through_to_time_cluster():
+    txns = [
+        tx("0x1", "0xa", ts="2026-08-18T10:00:00Z"),
+        tx("0x2", "0xb", ts="2026-08-18T10:01:00Z"),
+        tx("0x3", "0xc", ts="2026-08-18T10:02:00Z"),
+    ]
+    payer = by_axis([c for c in categorize_payers(txns, DEFAULT_CONFIG, "now") if c.transaction_id == 1])
+    assert payer[AXIS_PAYER].rule_matched == RULE_TIME_CLUSTER
+    assert payer[AXIS_PAYER].confidence_tier == UNCERTAIN
+
+
+def test_a_transaction_with_no_usable_memo_is_uncategorized_on_the_service_axis():
+    txns = [tx("0x1", "0xa"), tx("0x2", "0xa")]
+    service = by_axis([c for c in categorize_services(txns, DEFAULT_CONFIG, "now") if c.transaction_id == 1])
+    assert service[AXIS_SERVICE].category_label == UNCATEGORIZED
+    assert service[AXIS_SERVICE].rule_matched == RULE_NONE
+    assert service[AXIS_SERVICE].confidence_tier == DESCRIPTIVE
+
+
+def test_run_categorize_writes_two_rows_per_transaction(tmp_path):
+    conn = connect(tmp_path / "t.db")
+    init_schema(conn)
+    for i in (1, 2):
+        conn.execute(
+            """INSERT INTO transactions
+               (tx_hash, sender_address, receiver_address, amount_micro_usdc,
+                timestamp, memo, chain, raw_payload)
+               VALUES (?, '0xa', '0xm', 1000, '2026-08-18T10:00:00Z', 'weather-api', 'sim', '{}')""",
+            (f"0x{i}",),
+        )
+    conn.commit()
+
+    first = run_categorize(conn)
+    second = run_categorize(conn)
+
+    assert first == 4
+    assert second == 4
+    assert conn.execute("SELECT COUNT(*) AS n FROM categorizations").fetchone()["n"] == 4

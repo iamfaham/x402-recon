@@ -191,6 +191,13 @@ def test_an_agents_memo_drifts_over_its_life():
 def test_memo_drift_is_seen_by_memo_match_not_intercepted_by_sender_match():
     # C1b: the drift agent's address must never repeat, so sender_match
     # cannot claim these transactions before memo_match gets a chance.
+    #
+    # memo_match now runs only on the service axis (a shared memo identifies a
+    # service, not a payer), so the two axes are checked separately: the payer
+    # axis must never claim sender_match for these transactions (it may fall
+    # through to time_cluster or none, which is expected now that memo_match
+    # no longer intercepts on that axis), and the service axis is where
+    # memo_match is expected to fire.
     batch = generate_batch(count=120, seed=1)
     tagged = [
         t for t in batch.transactions
@@ -203,17 +210,30 @@ def test_memo_drift_is_seen_by_memo_match_not_intercepted_by_sender_match():
     )
 
     from ledger.categorize import categorize_transactions
-    from ledger.models import RULE_MEMO_MATCH, RULE_NONE, RULE_SENDER_MATCH
+    from ledger.models import (
+        AXIS_PAYER,
+        AXIS_SERVICE,
+        RULE_MEMO_MATCH,
+        RULE_NONE,
+        RULE_SENDER_MATCH,
+        RULE_TIME_CLUSTER,
+    )
 
     import dataclasses
 
     numbered = [dataclasses.replace(t, id=i) for i, t in enumerate(batch.transactions)]
     cats = categorize_transactions(numbered)
-    by_hash = {t.tx_hash: c for t, c in zip(numbered, cats)}
+    hash_by_id = {t.id: t.tx_hash for t in numbered}
+    by_hash_axis = {
+        (hash_by_id[c.transaction_id], c.axis): c for c in cats
+    }
 
-    rules_seen = {by_hash[t.tx_hash].rule_matched for t in tagged}
-    assert RULE_SENDER_MATCH not in rules_seen
-    assert rules_seen <= {RULE_MEMO_MATCH, RULE_NONE}
+    payer_rules_seen = {by_hash_axis[(t.tx_hash, AXIS_PAYER)].rule_matched for t in tagged}
+    assert RULE_SENDER_MATCH not in payer_rules_seen
+    assert payer_rules_seen <= {RULE_TIME_CLUSTER, RULE_NONE}
+
+    service_rules_seen = {by_hash_axis[(t.tx_hash, AXIS_SERVICE)].rule_matched for t in tagged}
+    assert service_rules_seen <= {RULE_MEMO_MATCH, RULE_NONE}
 
 
 def test_refunds_are_generated_against_real_payments():
