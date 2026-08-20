@@ -10,12 +10,15 @@ from ledger.evaluate import (
 )
 from ledger.models import (
     CONFIDENT,
+    DESCRIPTIVE,
+    RULE_MEMO_MATCH,
     RULE_SENDER_MATCH,
     RULE_TIME_CLUSTER,
     UNCATEGORIZED,
     UNCERTAIN,
     UNGROUPABLE,
 )
+from ledger.evaluate import failing_confident_rules
 
 
 def build(predicted, truth, tiers=None, rules=None, hazards=None):
@@ -290,3 +293,74 @@ def test_render_shows_n_a_not_zero_percent_for_an_empty_hazard_half():
     assert "ordinary" in text.lower()
     assert "n/a" in text
     assert "0.0%  (0)" not in text
+
+
+def test_rule_metrics_carry_their_tier():
+    result = build(
+        {"a": "g1", "b": "g1"},
+        {"a": "X", "b": "X"},
+        tiers={"a": CONFIDENT, "b": CONFIDENT},
+        rules={"a": RULE_SENDER_MATCH, "b": RULE_SENDER_MATCH},
+    )
+    assert result.per_rule[0].tier == CONFIDENT
+
+
+def test_a_diluted_bad_rule_is_caught_per_rule():
+    # THE REGRESSION GUARD FOR THIS RELEASE.
+    #
+    # Under the old AGGREGATE gate this passed silently: one large rule at 100%
+    # precision outvoted a small one at ~70%, the confident tier averaged above
+    # 0.95, and nothing warned. That averaging is the hole - not the particular
+    # rule that fell through it. A per-rule floor cannot be diluted.
+    #
+    # CONTROLLER RULING: uses range(30), not range(20) as originally drafted.
+    # (30 + 1.667)/33 = 0.9596 clears CALIBRATION_THRESHOLD while the memo
+    # rule sits at 0.5556 - so the aggregate genuinely passes while the
+    # per-rule floor genuinely catches it. With range(20) the aggregate
+    # itself would fail (0.9420 < 0.95), demonstrating nothing about
+    # dilution.
+    predicted = {f"s{i}": "big" for i in range(30)}
+    truth = {f"s{i}": "X" for i in range(30)}
+    tiers = {f"s{i}": CONFIDENT for i in range(30)}
+    rules = {f"s{i}": RULE_SENDER_MATCH for i in range(30)}
+
+    # A small confident rule that merges two unrelated payers.
+    predicted |= {"m1": "small", "m2": "small", "m3": "small"}
+    truth |= {"m1": "Y", "m2": "Y", "m3": "Z"}
+    tiers |= {k: CONFIDENT for k in ("m1", "m2", "m3")}
+    rules |= {k: RULE_MEMO_MATCH for k in ("m1", "m2", "m3")}
+
+    result = score(predicted, truth, tiers, rules)
+
+    assert result.confident_precision >= CALIBRATION_THRESHOLD  # aggregate passes
+    failing = failing_confident_rules(result)
+    assert [m.rule for m in failing] == [RULE_MEMO_MATCH]
+
+
+def test_descriptive_rules_are_never_flagged_by_the_floor():
+    # The service axis claims no confidence, so a threshold it was never asked
+    # to clear must not warn about it.
+    result = build(
+        {"a": "g1", "b": "g1", "c": "g1"},
+        {"a": "X", "b": "Y", "c": "Z"},
+        tiers=dict.fromkeys("abc", DESCRIPTIVE),
+        rules=dict.fromkeys("abc", RULE_MEMO_MATCH),
+    )
+    assert result.per_rule[0].precision < CALIBRATION_THRESHOLD
+    assert failing_confident_rules(result) == []
+
+
+def test_render_warns_naming_the_failing_rule():
+    # CONTROLLER RULING: uses range(30), see test_a_diluted_bad_rule_is_caught_per_rule.
+    predicted = {f"s{i}": "big" for i in range(30)}
+    truth = {f"s{i}": "X" for i in range(30)}
+    tiers = {f"s{i}": CONFIDENT for i in range(30)}
+    rules = {f"s{i}": RULE_SENDER_MATCH for i in range(30)}
+    predicted |= {"m1": "small", "m2": "small", "m3": "small"}
+    truth |= {"m1": "Y", "m2": "Y", "m3": "Z"}
+    tiers |= {k: CONFIDENT for k in ("m1", "m2", "m3")}
+    rules |= {k: RULE_MEMO_MATCH for k in ("m1", "m2", "m3")}
+
+    text = render_evaluation(score(predicted, truth, tiers, rules))
+    assert "WARNING" in text
+    assert RULE_MEMO_MATCH in text

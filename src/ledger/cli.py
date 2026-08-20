@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ledger.categorize import run_categorize
 from ledger.db import SchemaVersionError, connect, init_schema
-from ledger.evaluate import render_evaluation, run_evaluate
+from ledger.evaluate import render_axis_results, run_evaluate
 from ledger.ingest import IngestError, format_ingest_summary, ingest_from_dir
 from ledger.report import build_report, render_summary, write_csv
 from ledger.simulate import generate_batch, write_batch
@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
                 "Ground truth comes from simulated data, or from a hand-labeled sample."
             )
             return 1
-        print(render_evaluation(result))
+        print(render_axis_results(result))
         return 0
 
     return 1

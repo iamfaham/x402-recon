@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from ledger.models import (
     AXIS_PAYER,
+    AXIS_SERVICE,
     CONFIDENT,
     RULE_TIME_CLUSTER,
     UNCATEGORIZED,
@@ -55,6 +56,7 @@ class RuleMetrics:
     """
 
     rule: str
+    tier: str
     count: int
     precision: float
     recall: float
@@ -130,9 +132,12 @@ def score(
         members = [h for h in scored if rules.get(h, "none") == rule]
         hazardous = [h for h in members if h in hazard_tags]
         ordinary = [h for h in members if h not in hazard_tags]
+        member_tiers = {tiers.get(h) for h in members}
+        rule_tier = member_tiers.pop() if len(member_tiers) == 1 else CONFIDENT
         per_rule.append(
             RuleMetrics(
                 rule=rule,
+                tier=rule_tier,
                 count=len(members),
                 precision=_mean([precision[h] for h in members]),
                 recall=_mean([recall[h] for h in members]),
@@ -170,31 +175,75 @@ def time_cluster_verdict(result: EvaluationResult) -> tuple[float, bool] | None:
     return None
 
 
-def run_evaluate(conn: sqlite3.Connection) -> EvaluationResult | None:
-    """Score stored categorizations. Returns None when ground truth is absent."""
-    truth_rows = conn.execute("SELECT tx_hash, true_group FROM ground_truth").fetchall()
-    if not truth_rows:
-        return None
-    truth = {row["tx_hash"]: row["true_group"] for row in truth_rows}
+def failing_confident_rules(result: EvaluationResult) -> list[RuleMetrics]:
+    """Confident rules whose own precision falls below the threshold.
 
+    The gate is per-rule rather than an average across the confident tier. An
+    aggregate lets one large accurate rule dilute a small inaccurate one until
+    the tier passes while a rule inside it is wrong a third of the time. The
+    averaging is the hole, so the fix removes the averaging.
+
+    Descriptive rules are excluded. They claim no confidence, and a threshold
+    they were never asked to clear cannot meaningfully warn about them.
+    """
+    return [
+        metrics
+        for metrics in result.per_rule
+        if metrics.tier == CONFIDENT
+        and metrics.count
+        and metrics.precision < CALIBRATION_THRESHOLD
+    ]
+
+
+@dataclass(frozen=True)
+class AxisResults:
+    """One scoring result per axis. Service is None when its truth is absent."""
+
+    payer: EvaluationResult
+    service: EvaluationResult | None
+
+
+def _score_axis(conn, axis: str, truth: dict[str, str], hazards) -> EvaluationResult:
     rows = conn.execute(
         """SELECT t.tx_hash, c.category_label, c.confidence_tier, c.rule_matched
            FROM transactions t
-           JOIN categorizations c ON c.transaction_id = t.id AND c.axis = ?""",
-        (AXIS_PAYER,),
+           JOIN categorizations c
+             ON c.transaction_id = t.id AND c.axis = ?""",
+        (axis,),
     ).fetchall()
-
-    hazards = {
-        row["tx_hash"]: row["hazard"]
-        for row in conn.execute("SELECT tx_hash, hazard FROM hazards").fetchall()
-    }
-
     return score(
         predicted={row["tx_hash"]: row["category_label"] for row in rows},
         truth=truth,
         tiers={row["tx_hash"]: row["confidence_tier"] for row in rows},
         rules={row["tx_hash"]: row["rule_matched"] for row in rows},
-        hazards=hazards or None,
+        hazards=hazards,
+    )
+
+
+def run_evaluate(conn: sqlite3.Connection) -> AxisResults | None:
+    """Score both axes. Returns None when payer ground truth is absent."""
+    payer_rows = conn.execute("SELECT tx_hash, true_group FROM ground_truth").fetchall()
+    if not payer_rows:
+        return None
+    payer_truth = {row["tx_hash"]: row["true_group"] for row in payer_rows}
+
+    hazards = {
+        row["tx_hash"]: row["hazard"]
+        for row in conn.execute("SELECT tx_hash, hazard FROM hazards").fetchall()
+    } or None
+
+    service_rows = conn.execute(
+        "SELECT tx_hash, true_service FROM service_truth"
+    ).fetchall()
+    service_truth = {row["tx_hash"]: row["true_service"] for row in service_rows}
+
+    return AxisResults(
+        payer=_score_axis(conn, AXIS_PAYER, payer_truth, hazards),
+        service=(
+            _score_axis(conn, AXIS_SERVICE, service_truth, hazards)
+            if service_truth
+            else None
+        ),
     )
 
 
@@ -218,16 +267,21 @@ def render_evaluation(result: EvaluationResult) -> str:
         f"  ({result.declined_count} payments left uncategorized)",
     ]
 
-    if (
-        result.confident_count
-        and result.confident_precision < CALIBRATION_THRESHOLD
-    ):
-        lines += [
-            "",
-            "  WARNING: confident groupings fall below the calibration threshold.",
-            "  The tool is claiming more certainty than it has earned - treat",
-            "  confident groupings as unverified until the cascade is retuned.",
-        ]
+    failing = failing_confident_rules(result)
+    if failing:
+        lines.append("")
+        lines.append(
+            "  WARNING: these confident rules fall below the calibration threshold."
+        )
+        lines.append(
+            "  The tool is claiming more certainty than it has earned on them:"
+        )
+        for metrics in failing:
+            lines.append(
+                f"    {metrics.rule}: {metrics.precision:.1%}"
+                f" over {metrics.count} payments"
+                f" (threshold {CALIBRATION_THRESHOLD:.0%})"
+            )
 
     lines += ["", "Per rule", "--------"]
     for metrics in result.per_rule:
@@ -277,3 +331,29 @@ def render_evaluation(result: EvaluationResult) -> str:
             ]
 
     return "\n".join(lines)
+
+
+def render_axis_results(results: AxisResults) -> str:
+    """Render both axes, or just the payer axis when service truth is absent."""
+    text = ["Who paid you", "============", "", render_evaluation(results.payer)]
+    if results.service is None:
+        text += [
+            "",
+            "What they paid for",
+            "==================",
+            "",
+            "No service ground truth supplied, so service groupings are unscored.",
+        ]
+    else:
+        text += [
+            "",
+            "What they paid for",
+            "==================",
+            "",
+            "These groupings describe what was bought, not who bought it, and",
+            "claim no confidence. The figures below say how well grouping by the",
+            "payer's memo matches the services actually purchased.",
+            "",
+            render_evaluation(results.service),
+        ]
+    return "\n".join(text)
