@@ -76,7 +76,7 @@ def test_summary_shows_uncategorized_money_explicitly(tmp_path: Path):
     conn = prepared(tmp_path)
     summary = render_summary(build_report(conn, "2026-08-01", "2026-08-31"))
 
-    assert "uncategorized" in summary.lower()
+    assert "not identified" in summary.lower()
     assert "$0.50" in summary
 
 
@@ -107,7 +107,8 @@ def test_csv_has_one_row_per_transaction_with_headers(tmp_path: Path):
     assert written == 3
     assert len(rows) == 3
     assert {"tx_hash", "timestamp", "sender_address", "amount_usdc",
-            "category_label", "confidence_tier", "rule_matched"} <= set(rows[0])
+            "payer_label", "payer_tier", "payer_rule",
+            "service_label", "service_rule"} <= set(rows[0])
 
 
 def test_singular_payment_count_is_not_pluralized(tmp_path: Path):
@@ -178,7 +179,7 @@ def test_grand_total_reconciles_across_summary_breakdown_csv_and_ingest(
     run_categorize(conn)
 
     data = build_report(conn, "2026-08-01", "2026-08-31")
-    breakdown_total = sum(line.net_micro_usdc for line in data.lines)
+    breakdown_total = sum(line.net_micro_usdc for line in data.payer_lines)
 
     csv_path = tmp_path / "report.csv"
     write_csv(conn, "2026-08-01", "2026-08-31", csv_path)
@@ -276,7 +277,7 @@ def test_net_equals_gross_minus_refunded(tmp_path: Path):
 
 def test_category_line_nets_its_own_refunds(tmp_path: Path):
     data = build_report(refunded_db(tmp_path), "2026-08-01", "2026-08-31")
-    line = next(line for line in data.lines if line.category_label == "agent:0xa")
+    line = next(line for line in data.payer_lines if line.category_label == "agent:0xa")
     assert line.gross_micro_usdc == 4_000_000
     assert line.refunded_micro_usdc == 1_000_000
     assert line.net_micro_usdc == 3_000_000
@@ -324,7 +325,7 @@ def test_line_with_one_payment_and_one_refund_does_not_read_as_two_payments(
     run_categorize(conn)
 
     data = build_report(conn, "2026-08-01", "2026-08-31")
-    line = next(line for line in data.lines if line.category_label == "agent:0xa")
+    line = next(line for line in data.payer_lines if line.category_label == "agent:0xa")
     assert line.payment_count == 1
     assert line.refund_count == 1
 
@@ -344,7 +345,7 @@ def test_money_reconciles_with_refunds(tmp_path: Path):
     ).fetchone()["n"]
 
     data = build_report(conn, "2026-08-01", "2026-08-31")
-    line_net = sum(line.net_micro_usdc for line in data.lines)
+    line_net = sum(line.net_micro_usdc for line in data.payer_lines)
 
     csv_net = 0
     for row in csv.DictReader(out.read_text().splitlines()):
@@ -354,3 +355,75 @@ def test_money_reconciles_with_refunds(tmp_path: Path):
     assert data.net_micro_usdc == ingested_net
     assert line_net == ingested_net
     assert csv_net == ingested_net
+
+
+from ledger.models import AXIS_PAYER, AXIS_SERVICE, DESCRIPTIVE
+
+
+def both_axes_db(tmp_path: Path):
+    conn = connect(tmp_path / "b.db")
+    init_schema(conn)
+    seed_with_types(
+        conn,
+        [
+            ("0x1", "0xa", "weather-api", "2026-08-10T10:00:00Z", 3_000_000, "payment"),
+            ("0x2", "0xa", "weather-api", "2026-08-10T10:01:00Z", 1_000_000, "payment"),
+            ("0x3", "0xb", "search-api", "2026-08-11T10:00:00Z", 2_000_000, "payment"),
+            ("0x4", "0xb", "search-api", "2026-08-11T10:01:00Z", 1_000_000, TX_TYPE_REFUND),
+        ],
+    )
+    run_categorize(conn)
+    return conn
+
+
+def test_report_carries_both_breakdowns(tmp_path: Path):
+    data = build_report(both_axes_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert data.payer_lines
+    assert data.service_lines
+
+
+def test_both_breakdowns_reconcile_to_the_same_net(tmp_path: Path):
+    # Both axes partition the same money. If a transaction is dropped from one
+    # axis or double-counted in the other, these stop agreeing.
+    data = build_report(both_axes_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert sum(line.net_micro_usdc for line in data.payer_lines) == data.net_micro_usdc
+    assert sum(line.net_micro_usdc for line in data.service_lines) == data.net_micro_usdc
+
+
+def test_payer_breakdown_groups_by_sender(tmp_path: Path):
+    data = build_report(both_axes_db(tmp_path), "2026-08-01", "2026-08-31")
+    labels = {line.category_label for line in data.payer_lines}
+    assert "agent:0xa" in labels
+    assert "agent:0xb" in labels
+
+
+def test_service_breakdown_groups_by_memo(tmp_path: Path):
+    data = build_report(both_axes_db(tmp_path), "2026-08-01", "2026-08-31")
+    labels = {line.category_label for line in data.service_lines}
+    assert "service:weather-api" in labels
+    assert "service:search-api" in labels
+
+
+def test_service_lines_never_claim_confidence(tmp_path: Path):
+    data = build_report(both_axes_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert all(line.confidence_tier == DESCRIPTIVE for line in data.service_lines)
+
+
+def test_summary_renders_both_sections(tmp_path: Path):
+    summary = render_summary(build_report(both_axes_db(tmp_path), "2026-08-01", "2026-08-31"))
+    assert "Who paid you" in summary
+    assert "What they paid for" in summary
+    assert "memo" in summary.lower()
+
+
+def test_csv_carries_both_axes(tmp_path: Path):
+    conn = both_axes_db(tmp_path)
+    out = tmp_path / "b.csv"
+    write_csv(conn, "2026-08-01", "2026-08-31", out)
+
+    rows = list(csv.DictReader(out.read_text().splitlines()))
+    assert {"payer_label", "payer_tier", "payer_rule",
+            "service_label", "service_rule"} <= set(rows[0])
+    first = next(r for r in rows if r["tx_hash"] == "0x1")
+    assert first["payer_label"] == "agent:0xa"
+    assert first["service_label"] == "service:weather-api"

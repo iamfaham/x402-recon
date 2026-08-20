@@ -14,7 +14,9 @@ from pathlib import Path
 
 from ledger.models import (
     AXIS_PAYER,
+    AXIS_SERVICE,
     CONFIDENT,
+    DESCRIPTIVE,
     RULE_NONE,
     TX_TYPE_PAYMENT,
     TX_TYPE_REFUND,
@@ -36,11 +38,17 @@ def _refunds(count: int) -> str:
 _SELECT_IN_RANGE = f"""
 SELECT t.tx_hash, t.timestamp, t.sender_address, t.memo, t.amount_micro_usdc,
        t.tx_type,
-       COALESCE(c.category_label, '{UNCATEGORIZED}')  AS category_label,
-       COALESCE(c.confidence_tier, '{UNCERTAIN}')     AS confidence_tier,
-       COALESCE(c.rule_matched, '{RULE_NONE}')        AS rule_matched
+       COALESCE(p.category_label, '{UNCATEGORIZED}')  AS payer_label,
+       COALESCE(p.confidence_tier, '{UNCERTAIN}')     AS payer_tier,
+       COALESCE(p.rule_matched, '{RULE_NONE}')        AS payer_rule,
+       COALESCE(s.category_label, '{UNCATEGORIZED}')  AS service_label,
+       COALESCE(s.confidence_tier, '{DESCRIPTIVE}')   AS service_tier,
+       COALESCE(s.rule_matched, '{RULE_NONE}')        AS service_rule
 FROM transactions t
-LEFT JOIN categorizations c ON c.transaction_id = t.id AND c.axis = '{AXIS_PAYER}'
+LEFT JOIN categorizations p
+       ON p.transaction_id = t.id AND p.axis = '{AXIS_PAYER}'
+LEFT JOIN categorizations s
+       ON s.transaction_id = t.id AND s.axis = '{AXIS_SERVICE}'
 WHERE t.timestamp >= ? AND t.timestamp <= ?
 ORDER BY t.timestamp, t.id
 """
@@ -78,7 +86,8 @@ class ReportData:
 
     start: str
     end: str
-    lines: list[CategoryLine]
+    payer_lines: list[CategoryLine]
+    service_lines: list[CategoryLine]
     transaction_count: int
     payment_count: int
     refund_count: int
@@ -89,13 +98,11 @@ class ReportData:
     uncertain_micro_usdc: int
 
 
-def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
-    """Aggregate categorized transactions for an inclusive date range."""
-    rows = conn.execute(_SELECT_IN_RANGE, _bounds(start, end)).fetchall()
-
+def _breakdown(rows, label_key: str, tier_key: str, rule_key: str) -> list[CategoryLine]:
+    """Aggregate the same rows along one axis."""
     grouped: dict[tuple[str, str, str], list] = {}
     for row in rows:
-        key = (row["category_label"], row["confidence_tier"], row["rule_matched"])
+        key = (row[label_key], row[tier_key], row[rule_key])
         grouped.setdefault(key, []).append(row)
 
     lines = [
@@ -107,12 +114,10 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
             payment_count=sum(1 for r in members if r["tx_type"] == TX_TYPE_PAYMENT),
             refund_count=sum(1 for r in members if r["tx_type"] == TX_TYPE_REFUND),
             gross_micro_usdc=sum(
-                r["amount_micro_usdc"] for r in members
-                if r["tx_type"] == TX_TYPE_PAYMENT
+                r["amount_micro_usdc"] for r in members if r["tx_type"] == TX_TYPE_PAYMENT
             ),
             refunded_micro_usdc=sum(
-                r["amount_micro_usdc"] for r in members
-                if r["tx_type"] == TX_TYPE_REFUND
+                r["amount_micro_usdc"] for r in members if r["tx_type"] == TX_TYPE_REFUND
             ),
             net_micro_usdc=sum(_signed(r) for r in members),
         )
@@ -127,10 +132,19 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
             -line.net_micro_usdc,
         )
     )
+    return lines
+
+
+def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
+    """Aggregate categorized transactions for an inclusive date range."""
+    rows = conn.execute(_SELECT_IN_RANGE, _bounds(start, end)).fetchall()
+
+    payer_lines = _breakdown(rows, "payer_label", "payer_tier", "payer_rule")
+    service_lines = _breakdown(rows, "service_label", "service_tier", "service_rule")
 
     gross = sum(r["amount_micro_usdc"] for r in rows if r["tx_type"] == TX_TYPE_PAYMENT)
     refunded = sum(r["amount_micro_usdc"] for r in rows if r["tx_type"] == TX_TYPE_REFUND)
-    confident = sum(_signed(r) for r in rows if r["confidence_tier"] == CONFIDENT)
+    confident = sum(_signed(r) for r in rows if r["payer_tier"] == CONFIDENT)
     net = gross - refunded
     payment_count = sum(1 for r in rows if r["tx_type"] == TX_TYPE_PAYMENT)
     refund_count = sum(1 for r in rows if r["tx_type"] == TX_TYPE_REFUND)
@@ -138,7 +152,8 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
     return ReportData(
         start=start,
         end=end,
-        lines=lines,
+        payer_lines=payer_lines,
+        service_lines=service_lines,
         transaction_count=len(rows),
         payment_count=payment_count,
         refund_count=refund_count,
@@ -147,6 +162,33 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
         net_micro_usdc=net,
         confident_micro_usdc=confident,
         uncertain_micro_usdc=net - confident,
+    )
+
+
+def _format_line(line: CategoryLine, axis: str) -> str:
+    """Render one breakdown row.
+
+    The [needs review] marker is gated on UNCERTAIN specifically rather than on
+    "not CONFIDENT". DESCRIPTIVE is neither confident nor uncertain, and marking
+    service groupings for review would express a doubt the tool is not claiming.
+    """
+    if line.category_label == UNCATEGORIZED:
+        name = "Not identified" if axis == AXIS_PAYER else "No service identified"
+    else:
+        name = line.category_label
+
+    marker = "   [needs review]" if line.confidence_tier == UNCERTAIN else ""
+
+    # Payment count is reported against gross, refund count against refunds - a
+    # line with one payment and one refund never reads as "2 payments" when in
+    # fact it was one payment that came back.
+    counts = f"{line.payment_count} {_payments(line.payment_count)}"
+    if line.refund_count:
+        counts += f", {line.refund_count} {_refunds(line.refund_count)}"
+
+    return (
+        f"  {name:<48} {format_usdc(line.net_micro_usdc):>16}"
+        f"  ({counts}){marker}"
     )
 
 
@@ -173,28 +215,23 @@ def render_summary(data: ReportData) -> str:
         "",
         f"  Confidently identified: {format_usdc(data.confident_micro_usdc)}",
         f"  Needs review:           {format_usdc(data.uncertain_micro_usdc)}",
-        "",
-        "Breakdown by source (net of refunds)",
-        "------------------------------------",
     ]
 
-    for line in data.lines:
-        name = (
-            "Uncategorized"
-            if line.category_label == UNCATEGORIZED
-            else line.category_label
-        )
-        marker = "" if line.confidence_tier == CONFIDENT else "   [needs review]"
-        # Payment count is reported against gross, refund count against
-        # refunds - a line with one payment and one refund never reads as
-        # "2 payments" when in fact it was one payment that came back.
-        counts = f"{line.payment_count} {_payments(line.payment_count)}"
-        if line.refund_count:
-            counts += f", {line.refund_count} {_refunds(line.refund_count)}"
-        lines.append(
-            f"  {name:<48} {format_usdc(line.net_micro_usdc):>16}"
-            f"  ({counts}){marker}"
-        )
+    lines += [
+        "",
+        "Who paid you (net of refunds)",
+        "-----------------------------",
+    ]
+    lines += [_format_line(line, AXIS_PAYER) for line in data.payer_lines]
+
+    lines += [
+        "",
+        "What they paid for (net of refunds)",
+        "-----------------------------------",
+        "  Grouped by the memo the payer sent. These groupings describe what was",
+        "  bought; they are not a claim about who bought it.",
+    ]
+    lines += [_format_line(line, AXIS_SERVICE) for line in data.service_lines]
 
     lines += [
         "",
@@ -222,9 +259,11 @@ def write_csv(conn: sqlite3.Connection, start: str, end: str, out_path: Path) ->
                 "memo",
                 "amount_usdc",
                 "tx_type",
-                "category_label",
-                "confidence_tier",
-                "rule_matched",
+                "payer_label",
+                "payer_tier",
+                "payer_rule",
+                "service_label",
+                "service_rule",
             ]
         )
         for row in rows:
@@ -236,9 +275,11 @@ def write_csv(conn: sqlite3.Connection, start: str, end: str, out_path: Path) ->
                     row["memo"] or "",
                     f"{micro_to_decimal(row['amount_micro_usdc']):.6f}",
                     row["tx_type"],
-                    row["category_label"],
-                    row["confidence_tier"],
-                    row["rule_matched"],
+                    row["payer_label"],
+                    row["payer_tier"],
+                    row["payer_rule"],
+                    row["service_label"],
+                    row["service_rule"],
                 ]
             )
     return len(rows)
