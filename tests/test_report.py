@@ -416,10 +416,48 @@ def test_service_lines_are_tiered_confident_or_uncertain(tmp_path: Path):
     assert any(line.confidence_tier == CONFIDENT for line in data.service_lines)
 
 
+def divergent_axes_db(tmp_path: Path):
+    """Payer axis and service axis disagree about which rows are confident.
+
+    0x1/0x2 share a sender (0xa) but each carry a memo seen nowhere else, so
+    they are CONFIDENT on the payer axis (sender_match) and UNCERTAIN on the
+    service axis (memo_match never fires - no repeated memo). 0x3/0x4 have
+    distinct, one-off senders but share a memo, so they are UNCERTAIN on the
+    payer axis and CONFIDENT on the service axis. The two confident sets are
+    disjoint and sum to different totals, so a test built on this fixture
+    cannot pass by accident if `confident_micro_usdc` is wired to the wrong
+    axis, reads either axis, or OR-folds the two - both_axes_db could not
+    catch that because its confident rows happen to coincide on both axes.
+    """
+    conn = connect(tmp_path / "d.db")
+    init_schema(conn)
+    seed_with_types(
+        conn,
+        [
+            ("0x1", "0xa", "unique-memo-1", "2026-08-10T10:00:00Z", 3_000_000, "payment"),
+            ("0x2", "0xa", "unique-memo-2", "2026-08-10T10:01:00Z", 1_000_000, "payment"),
+            ("0x3", "0xc", "shared-memo", "2026-08-11T10:00:00Z", 2_000_000, "payment"),
+            ("0x4", "0xd", "shared-memo", "2026-08-11T10:01:00Z", 500_000, "payment"),
+        ],
+    )
+    run_categorize(conn)
+    return conn
+
+
 def test_service_confidence_does_not_inflate_the_payer_confident_total(tmp_path: Path):
     # The trap in this branch. Confidence is per-axis; each axis may earn its
     # own, and they stay separate in the report.
-    conn = both_axes_db(tmp_path)
+    #
+    # both_axes_db is not enough to pin this: every seeded sender there
+    # appears exactly twice and every seeded memo appears exactly twice, so
+    # payer-confident and service-confident select the identical four rows
+    # and the two totals are equal regardless of which axis
+    # `confident_micro_usdc` actually reads. divergent_axes_db makes the two
+    # axes disagree about which rows are confident, so the totals genuinely
+    # differ and this test would fail if `confident_micro_usdc` read
+    # `service_tier`, or OR-folded the two tiers, instead of `payer_tier`
+    # alone.
+    conn = divergent_axes_db(tmp_path)
     data = build_report(conn, "2026-08-01", "2026-08-31")
 
     payer_confident = sum(
@@ -427,7 +465,18 @@ def test_service_confidence_does_not_inflate_the_payer_confident_total(tmp_path:
         for line in data.payer_lines
         if line.confidence_tier == CONFIDENT
     )
+    service_confident = sum(
+        line.net_micro_usdc
+        for line in data.service_lines
+        if line.confidence_tier == CONFIDENT
+    )
+
+    assert payer_confident == 4_000_000  # 0x1 + 0x2, sender_match on 0xa
+    assert service_confident == 2_500_000  # 0x3 + 0x4, memo_match on shared-memo
+    assert payer_confident != service_confident
+
     assert data.confident_micro_usdc == payer_confident
+    assert data.confident_micro_usdc != service_confident
 
 
 def test_summary_renders_both_sections(tmp_path: Path):

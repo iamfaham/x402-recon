@@ -235,7 +235,7 @@ def render_summary(data: ReportData) -> str:
     lines += [
         "",
         "Anything marked [needs review] could not be confidently matched to a",
-        "single payer. Please confirm these before relying on the totals.",
+        "single payer or service. Please confirm these before relying on the totals.",
         "",
         "This report organizes payment data you have already received.",
         "It is not tax or accounting advice.",
