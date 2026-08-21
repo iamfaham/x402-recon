@@ -2,6 +2,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 from ledger.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND, UNGROUPABLE
 from ledger.simulate import (
     HAZARD_INTERLEAVED_ONE_OFF,
@@ -261,10 +263,13 @@ def test_amounts_span_sub_cent_to_large():
     assert max(amounts) > 1_000_000    # over a dollar
 
 
-def test_hazards_are_a_minority_of_the_dataset():
+@pytest.mark.parametrize("count", [120, 300])
+def test_hazards_are_a_minority_of_the_dataset(count):
     # A dataset where everything is adversarial cannot tell you which weakness
-    # matters. Ordinary traffic must stay the bulk of it.
-    batch = generate_batch(count=120, seed=1)
+    # matters. Ordinary traffic must stay the bulk of it. Pinned at both the
+    # old canonical count (120) and the v0.1c canonical count (300, measured
+    # at 20.3% - see docs/measurements-v0.1c.md).
+    batch = generate_batch(count=count, seed=1)
     assert len(batch.hazards) < len(batch.transactions) / 2
 
 
