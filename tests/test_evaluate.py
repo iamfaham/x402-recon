@@ -10,7 +10,6 @@ from ledger.evaluate import (
 )
 from ledger.models import (
     CONFIDENT,
-    DESCRIPTIVE,
     RULE_MEMO_MATCH,
     RULE_SENDER_MATCH,
     UNCATEGORIZED,
@@ -265,13 +264,14 @@ def test_a_diluted_bad_rule_is_caught_per_rule():
     assert [m.rule for m in failing] == [RULE_MEMO_MATCH]
 
 
-def test_descriptive_rules_are_never_flagged_by_the_floor():
-    # The service axis claims no confidence, so a threshold it was never asked
-    # to clear must not warn about it.
+def test_non_confident_rules_are_never_flagged_by_the_floor():
+    # failing_confident_rules only warns about rules tiered CONFIDENT. A rule
+    # whose rows are tiered UNCERTAIN was never claiming confidence, so a
+    # threshold it was never asked to clear must not warn about it.
     result = build(
         {"a": "g1", "b": "g1", "c": "g1"},
         {"a": "X", "b": "Y", "c": "Z"},
-        tiers=dict.fromkeys("abc", DESCRIPTIVE),
+        tiers=dict.fromkeys("abc", UNCERTAIN),
         rules=dict.fromkeys("abc", RULE_MEMO_MATCH),
     )
     assert result.per_rule[0].precision < CALIBRATION_THRESHOLD
@@ -311,7 +311,10 @@ def test_render_evaluation_still_shows_calibration_by_default():
     assert "Confident tier precision" in text
 
 
-def test_render_axis_results_shows_both_axis_headers_and_no_service_calibration():
+def test_render_axis_results_shows_both_axis_headers_and_both_calibrations():
+    # v0.1c: the service axis earned its confidence claim (memo_match cleared
+    # the calibration floor at the canonical count), so it now carries a
+    # calibration section just like the payer axis.
     payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
     service = build({"a": "s1", "b": "s1"}, {"a": "S", "b": "S"})
     text = render_axis_results(AxisResults(payer=payer, service=service))
@@ -319,13 +322,10 @@ def test_render_axis_results_shows_both_axis_headers_and_no_service_calibration(
     assert "Who paid you" in text
     assert "What they paid for" in text
 
-    # The service block must carry no calibration section at all.
     service_block = text.split("What they paid for", 1)[1]
-    assert "Calibration" not in service_block
-    assert "Confident tier precision" not in service_block
+    assert "Calibration" in service_block
+    assert "Confident tier precision" in service_block
 
-    # And the payer block (before the service section) still has one, since
-    # the payer axis claims confidence.
     payer_block = text.split("What they paid for", 1)[0]
     assert "Calibration" in payer_block
     assert "Confident tier precision" in payer_block
@@ -341,10 +341,12 @@ def test_render_axis_results_reports_service_axis_unscored_when_none():
 
 
 def _memo_result(predicted, truth):
+    # memo_match rows are tiered CONFIDENT now that the service axis has
+    # earned its confidence claim (v0.1c).
     return score(
         predicted,
         truth,
-        dict.fromkeys(predicted, DESCRIPTIVE),
+        dict.fromkeys(predicted, CONFIDENT),
         dict.fromkeys(predicted, RULE_MEMO_MATCH),
     )
 
@@ -399,7 +401,7 @@ def test_service_verdict_is_none_when_memo_match_never_fired():
     result = score(
         predicted,
         truth,
-        {"a": DESCRIPTIVE},
+        {"a": UNCERTAIN},
         {"a": "none"},
     )
     assert service_confidence_verdict(result) is None
@@ -407,8 +409,9 @@ def test_service_verdict_is_none_when_memo_match_never_fired():
 
 def test_service_axis_recall_description_says_service():
     # This figure sits in the section whose whole point is that it does NOT
-    # answer a payer question.
+    # answer a payer question. `subject` is now explicit, since both axes
+    # claim confidence and claims_confidence no longer distinguishes them.
     result = _memo_result({"a": "svc", "b": "svc"}, {"a": "X", "b": "X"})
-    text = render_evaluation(result, claims_confidence=False)
+    text = render_evaluation(result, subject="service")
     assert "from one service" in text
     assert "from one payer" not in text

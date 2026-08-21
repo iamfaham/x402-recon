@@ -357,7 +357,7 @@ def test_money_reconciles_with_refunds(tmp_path: Path):
     assert csv_net == ingested_net
 
 
-from ledger.models import AXIS_PAYER, AXIS_SERVICE, DESCRIPTIVE
+from ledger.models import AXIS_PAYER, AXIS_SERVICE, CONFIDENT, UNCERTAIN
 
 
 def both_axes_db(tmp_path: Path):
@@ -404,9 +404,30 @@ def test_service_breakdown_groups_by_memo(tmp_path: Path):
     assert "service:search-api" in labels
 
 
-def test_service_lines_never_claim_confidence(tmp_path: Path):
+def test_service_lines_are_tiered_confident_or_uncertain(tmp_path: Path):
+    # v0.1c: memo_match earned its confidence claim, so service rows are
+    # tiered like payer rows - CONFIDENT for a claimed grouping, UNCERTAIN
+    # for a declined one - rather than the retired DESCRIPTIVE tier.
     data = build_report(both_axes_db(tmp_path), "2026-08-01", "2026-08-31")
-    assert all(line.confidence_tier == DESCRIPTIVE for line in data.service_lines)
+    assert data.service_lines
+    assert all(
+        line.confidence_tier in (CONFIDENT, UNCERTAIN) for line in data.service_lines
+    )
+    assert any(line.confidence_tier == CONFIDENT for line in data.service_lines)
+
+
+def test_service_confidence_does_not_inflate_the_payer_confident_total(tmp_path: Path):
+    # The trap in this branch. Confidence is per-axis; each axis may earn its
+    # own, and they stay separate in the report.
+    conn = both_axes_db(tmp_path)
+    data = build_report(conn, "2026-08-01", "2026-08-31")
+
+    payer_confident = sum(
+        line.net_micro_usdc
+        for line in data.payer_lines
+        if line.confidence_tier == CONFIDENT
+    )
+    assert data.confident_micro_usdc == payer_confident
 
 
 def test_summary_renders_both_sections(tmp_path: Path):

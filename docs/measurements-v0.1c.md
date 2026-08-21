@@ -602,3 +602,96 @@ precision was dragging the aggregate down; recall and declined coverage both
 move against the tool, which is the expected cost of a rule that guessed
 wrong roughly three times in ten now declining instead. `MIN_VERDICT_SAMPLE`
 and `CALIBRATION_THRESHOLD` are unchanged by this decision.
+
+---
+
+## Decision: the service axis
+
+Measured at the canonical count: memo_match B-cubed precision 96.2% on 105 payments.
+Pre-registered criterion: >= 0.95 with at least 20 firings.
+
+Verdict: EARNS A CONFIDENCE CLAIM
+
+The margin is not comfortable. 96.2% clears 0.95 by 1.2 points, and the
+sensitivity note above already records that this verdict rides on the size
+chosen for the `shared_memo_different_services` hazard: `N=8` gives 96.2% and
+passes, but a differently-sized, equally defensible `N=12` would give
+approximately 0.945 and fail. `N=8` was fixed for comparability with the
+other named hazards, before this number existed, so it is not a choice made
+to produce this result — but the margin is thin enough that a reader should
+treat this as a real pass, not a settled one. Nothing short of measuring
+against real production traffic instead of a synthetic hazard resolves that
+with the confidence the word "EARNS" implies.
+
+The criterion binds regardless: `memo_match` clears the floor every confident
+rule must clear, so the service axis now claims confidence. Its rows are
+tiered like the payer axis - claimed rows confident, declined rows uncertain
+- and `DESCRIPTIVE` is removed, having no remaining user.
+
+Its money stays out of the payer axis's confident total. Confidence is
+per-axis: "who paid you" and "what they paid for" are different claims, and
+summing them is the defect v0.1b existed to remove.
+
+### Post-promotion re-measurement (count=300, seed=42)
+
+Re-simulated, re-ingested, re-categorized, and re-evaluated on the same seed
+and count against the promoted cascade (`time_cluster` already removed).
+
+```
+Who paid you
+============
+
+Categorization accuracy (B-cubed)
+=================================
+
+Precision:   100.0%   (of the payments grouped together, how many belonged together)
+Recall:      95.7%   (of the payments from one payer, how many were found)
+             scored over 300 payments
+
+Calibration - does 'confident' actually mean confident?
+  Confident tier precision: 100.0%  (115 payments, threshold 95%)
+  Declined coverage:        94.6%  (185 payments left uncategorized)
+
+Per rule
+--------
+  none           precision 100.0%   recall  94.6%   (185 payments)
+    hazard cases     100.0%  (38)    ordinary   100.0%  (147)
+  sender_match   precision 100.0%   recall  97.4%   (115 payments)
+    hazard cases     100.0%  (23)    ordinary   100.0%  (92)
+
+What they paid for
+==================
+
+These groupings describe what was bought, not who bought it. The
+figures below say how well grouping by the payer's memo matches
+the services actually purchased.
+
+Precision:   98.7%   (of the payments grouped together, how many belonged together)
+Recall:      97.6%   (of the payments from one service, how many were found)
+             scored over 300 payments
+
+Calibration - does 'confident' actually mean confident?
+  Confident tier precision: 96.2%  (105 payments, threshold 95%)
+  Declined coverage:        100.0%  (195 payments left uncategorized)
+
+Per rule
+--------
+  memo_match     precision  96.2%   recall  93.1%   (105 payments)
+    hazard cases      89.7%  (39)    ordinary   100.0%  (66)
+  none           precision 100.0%   recall 100.0%   (195 payments)
+    hazard cases     100.0%  (22)    ordinary   100.0%  (173)
+
+Pre-registered criterion: memo_match B-cubed precision 96.2% on 105 payments - EARNS a confidence claim (threshold 0.95)
+```
+
+The service axis now carries a calibration block identical in shape to the
+payer axis's, at 96.2% confident-tier precision over the same 105
+`memo_match` payments the pre-registered criterion was measured against.
+`report`'s "Confidently identified" total is unaffected: it reads
+`payer_tier` only, and the promotion adds no term to it. Verified directly
+with `uv run ledger report --from 2026-01-01 --to 2026-12-31` on this
+dataset: `Confidently identified: $147.372312`, exactly the sum of the
+payer-axis lines tiered `confident` (`agent:0xa3a4419f...` through
+`agent:0x8927965e...`), unchanged in shape from the pre-promotion report.
+`MIN_VERDICT_SAMPLE` and `CALIBRATION_THRESHOLD` are unchanged by this
+decision.

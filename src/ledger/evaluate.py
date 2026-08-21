@@ -258,14 +258,19 @@ def run_evaluate(conn: sqlite3.Connection) -> AxisResults | None:
     )
 
 
-def _render_evaluation_body(result: EvaluationResult, claims_confidence: bool) -> list[str]:
+def _render_evaluation_body(
+    result: EvaluationResult, claims_confidence: bool, subject: str
+) -> list[str]:
     """Metrics, calibration (when claimed), per-rule breakdown, and verdict.
 
     Split out from `render_evaluation` so `render_axis_results` can render the
     service axis's body without also repeating the "Categorization accuracy
     (B-cubed)" banner underneath its own "What they paid for" section header.
+
+    `subject` names the axis in the recall description ("payer" or "service")
+    independently of `claims_confidence` - both axes claim confidence now, so
+    that flag no longer distinguishes them.
     """
-    subject = "payer" if claims_confidence else "service"
     lines = [
         f"Precision:   {result.precision:.1%}"
         f"   (of the payments grouped together, how many belonged together)",
@@ -325,7 +330,7 @@ def _render_evaluation_body(result: EvaluationResult, claims_confidence: bool) -
                 f"  ({metrics.ordinary_count})"
             )
 
-    if not claims_confidence:
+    if subject == "service":
         service = service_confidence_verdict(result)
         if service is not None:
             precision, count, earns = service
@@ -350,21 +355,22 @@ def _render_evaluation_body(result: EvaluationResult, claims_confidence: bool) -
     return lines
 
 
-def render_evaluation(result: EvaluationResult, claims_confidence: bool = True) -> str:
+def render_evaluation(
+    result: EvaluationResult, claims_confidence: bool = True, subject: str = "payer"
+) -> str:
     """Render the banner, metrics, per-rule breakdown, and computed verdict.
 
     `claims_confidence` controls whether the calibration block is shown at
-    all. A rule tier that claims no confidence (the service axis's
-    `memo_match`/`none`) has no calibration floor to be measured against, so
-    printing a 0.0% figure beside a zero count there reads as failure when it
-    means the section was never asked to clear a bar in the first place.
+    all. `subject` names the axis ("payer" or "service") in the recall
+    description; it is independent of `claims_confidence` because both axes
+    now claim confidence.
     """
     lines = [
         "Categorization accuracy (B-cubed)",
         "=================================",
         "",
     ]
-    lines += _render_evaluation_body(result, claims_confidence)
+    lines += _render_evaluation_body(result, claims_confidence, subject)
     return "\n".join(lines)
 
 
@@ -385,13 +391,15 @@ def render_axis_results(results: AxisResults) -> str:
             "What they paid for",
             "==================",
             "",
-            "These groupings describe what was bought, not who bought it, and",
-            "claim no confidence. The figures below say how well grouping by the",
-            "payer's memo matches the services actually purchased.",
+            "These groupings describe what was bought, not who bought it. The",
+            "figures below say how well grouping by the payer's memo matches",
+            "the services actually purchased.",
             "",
         ]
         # No nested "Categorization accuracy (B-cubed)" banner here: the
         # section header above already names the axis, so repeating it would
         # be a duplicated, redundant heading.
-        text += _render_evaluation_body(results.service, claims_confidence=False)
+        text += _render_evaluation_body(
+            results.service, claims_confidence=True, subject="service"
+        )
     return "\n".join(text)

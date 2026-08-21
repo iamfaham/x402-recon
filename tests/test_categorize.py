@@ -97,9 +97,11 @@ def test_single_sender_does_not_get_sender_match():
     assert result["0x1"].rule_matched != RULE_SENDER_MATCH
 
 
-def test_shared_memo_from_different_senders_is_descriptive_memo_match():
-    # Grouping by memo is a service signal, not a payer identity, so it now
-    # lands on the service axis and never claims CONFIDENT.
+def test_shared_memo_from_different_senders_is_confident_memo_match():
+    # Grouping by memo is a service signal, not a payer identity, so it lands
+    # on the service axis. memo_match cleared the calibration floor at the
+    # canonical count (96.2% precision on 105 payments), so it now claims
+    # CONFIDENT there, mirroring the payer axis's sender_match.
     txns = [
         tx("0x1", "0xa", memo="weather-api"),
         tx("0x2", "0xb", memo="weather-api"),
@@ -108,7 +110,7 @@ def test_shared_memo_from_different_senders_is_descriptive_memo_match():
     result = by_hash(service, txns)
 
     assert result["0x1"].rule_matched == RULE_MEMO_MATCH
-    assert result["0x1"].confidence_tier == DESCRIPTIVE
+    assert result["0x1"].confidence_tier == CONFIDENT
     assert result["0x1"].category_label == "service:weather-api"
 
 
@@ -180,7 +182,7 @@ def test_run_categorize_is_idempotent(tmp_path):
 
 
 from ledger.categorize import categorize_services
-from ledger.models import AXIS_PAYER, AXIS_SERVICE, DESCRIPTIVE
+from ledger.models import AXIS_PAYER, AXIS_SERVICE
 
 
 def by_axis(cats):
@@ -199,7 +201,7 @@ def test_a_known_sender_with_a_specific_memo_gets_both_labels():
     assert first[AXIS_PAYER].category_label == "agent:0xa"
     assert first[AXIS_PAYER].confidence_tier == CONFIDENT
     assert first[AXIS_SERVICE].category_label == "service:weather-api"
-    assert first[AXIS_SERVICE].confidence_tier == DESCRIPTIVE
+    assert first[AXIS_SERVICE].confidence_tier == CONFIDENT
 
 
 def test_every_transaction_gets_exactly_one_row_per_axis():
@@ -220,15 +222,20 @@ def test_memo_match_never_appears_on_the_payer_axis():
     assert all(c.rule_matched != RULE_MEMO_MATCH for c in payer)
 
 
-def test_service_rows_never_claim_confidence():
+def test_service_rows_are_tiered_like_the_payer_axis():
+    # memo_match earned its confidence claim (v0.1c), so claimed service rows
+    # are CONFIDENT and declined ones are UNCERTAIN - the same split the
+    # payer axis has always used.
     txns = [
         tx("0x1", "0xa", memo="weather-api"),
         tx("0x2", "0xb", memo="weather-api"),
         tx("0x3", "0xc"),
     ]
     service = [c for c in categorize_transactions(txns) if c.axis == AXIS_SERVICE]
-    assert service
-    assert all(c.confidence_tier == DESCRIPTIVE for c in service)
+    result = by_hash(service, txns)
+    assert result["0x1"].confidence_tier == CONFIDENT
+    assert result["0x2"].confidence_tier == CONFIDENT
+    assert result["0x3"].confidence_tier == UNCERTAIN
 
 
 def test_a_transaction_with_no_usable_memo_is_uncategorized_on_the_service_axis():
@@ -236,7 +243,7 @@ def test_a_transaction_with_no_usable_memo_is_uncategorized_on_the_service_axis(
     service = by_axis([c for c in categorize_services(txns, DEFAULT_CONFIG, "now") if c.transaction_id == 1])
     assert service[AXIS_SERVICE].category_label == UNCATEGORIZED
     assert service[AXIS_SERVICE].rule_matched == RULE_NONE
-    assert service[AXIS_SERVICE].confidence_tier == DESCRIPTIVE
+    assert service[AXIS_SERVICE].confidence_tier == UNCERTAIN
 
 
 def test_run_categorize_writes_two_rows_per_transaction(tmp_path):

@@ -20,7 +20,6 @@ from ledger.models import (
     AXIS_PAYER,
     AXIS_SERVICE,
     CONFIDENT,
-    DESCRIPTIVE,
     RULE_MEMO_MATCH,
     RULE_NONE,
     RULE_SENDER_MATCH,
@@ -90,14 +89,17 @@ def categorize_services(
     """Answer 'what was this paid for' for every transaction.
 
     Grouping is by exact memo string, which carries an inference - that the same
-    memo means the same service - so the result is measured. Until it is, every
-    row is DESCRIPTIVE: stated, not claimed.
+    memo means the same service - so the result is measured. memo_match cleared
+    the calibration floor (B-cubed precision >= CALIBRATION_THRESHOLD on at
+    least MIN_VERDICT_SAMPLE firings, measured at the canonical count), so this
+    axis now mirrors the payer cascade: claimed rows are confident, declined
+    rows are uncertain.
     """
     memo_counts = build_memo_counts(txns, config)
 
     results = []
     for transaction in txns:
-        label, rule = UNCATEGORIZED, RULE_NONE
+        label, tier, rule = UNCATEGORIZED, UNCERTAIN, RULE_NONE
         memo = None if transaction.memo is None else transaction.memo.strip()
 
         if (
@@ -106,14 +108,14 @@ def categorize_services(
             and memo_counts[memo] >= config.min_occurrences
         ):
             label = f"service:{memo}"
-            rule = RULE_MEMO_MATCH
+            tier, rule = CONFIDENT, RULE_MEMO_MATCH
 
         results.append(
             Categorization(
                 transaction_id=transaction.id,
                 axis=AXIS_SERVICE,
                 category_label=label,
-                confidence_tier=DESCRIPTIVE,
+                confidence_tier=tier,
                 rule_matched=rule,
                 categorized_at=categorized_at,
             )
