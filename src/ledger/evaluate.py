@@ -26,6 +26,7 @@ from ledger.models import (
     AXIS_PAYER,
     AXIS_SERVICE,
     CONFIDENT,
+    RULE_MEMO_MATCH,
     RULE_TIME_CLUSTER,
     UNCATEGORIZED,
     UNGROUPABLE,
@@ -175,6 +176,31 @@ def time_cluster_verdict(result: EvaluationResult) -> tuple[float, bool] | None:
     return None
 
 
+def service_confidence_verdict(
+    result: EvaluationResult,
+) -> tuple[float, int, bool] | None:
+    """Apply the pre-registered service criterion. None when memo_match never fired.
+
+    Returns (measured B-cubed precision, firing count, whether it earns a
+    confidence claim).
+
+    The criterion reuses CALIBRATION_THRESHOLD rather than inventing a number:
+    a rule that could not survive the floor it would then be subject to has no
+    business claiming confidence in the first place. Withholds below
+    MIN_VERDICT_SAMPLE for the same reason time_cluster does - a precision
+    computed over a handful of rows is a coin flip, and withholding can only
+    ever deny a claim, never manufacture one.
+    """
+    for metrics in result.per_rule:
+        if metrics.rule == RULE_MEMO_MATCH:
+            earns = (
+                metrics.count >= MIN_VERDICT_SAMPLE
+                and metrics.precision >= CALIBRATION_THRESHOLD
+            )
+            return metrics.precision, metrics.count, earns
+    return None
+
+
 def failing_confident_rules(result: EvaluationResult) -> list[RuleMetrics]:
     """Confident rules whose own precision falls below the threshold.
 
@@ -254,11 +280,12 @@ def _render_evaluation_body(result: EvaluationResult, claims_confidence: bool) -
     service axis's body without also repeating the "Categorization accuracy
     (B-cubed)" banner underneath its own "What they paid for" section header.
     """
+    subject = "payer" if claims_confidence else "service"
     lines = [
         f"Precision:   {result.precision:.1%}"
         f"   (of the payments grouped together, how many belonged together)",
         f"Recall:      {result.recall:.1%}"
-        f"   (of the payments from one payer, how many were found)",
+        f"   (of the payments from one {subject}, how many were found)",
         f"             scored over {result.transaction_count} payments",
     ]
 
@@ -335,6 +362,28 @@ def _render_evaluation_body(result: EvaluationResult, claims_confidence: bool) -
                 f"{precision:.1%} on {count} payments - {outcome} threshold "
                 f"{TIME_CLUSTER_THRESHOLD:.2f}",
             ]
+
+    if not claims_confidence:
+        service = service_confidence_verdict(result)
+        if service is not None:
+            precision, count, earns = service
+            if count < MIN_VERDICT_SAMPLE:
+                lines += [
+                    "",
+                    f"Pre-registered criterion: memo_match B-cubed precision "
+                    f"{precision:.1%} on {count} payments - "
+                    f"INSUFFICIENT DATA (need {MIN_VERDICT_SAMPLE}) - "
+                    "no confidence claim",
+                ]
+            else:
+                outcome = "EARNS" if earns else "DOES NOT EARN"
+                lines += [
+                    "",
+                    f"Pre-registered criterion: memo_match B-cubed precision "
+                    f"{precision:.1%} on {count} payments - {outcome} a "
+                    f"confidence claim (threshold "
+                    f"{CALIBRATION_THRESHOLD:.2f})",
+                ]
 
     return lines
 

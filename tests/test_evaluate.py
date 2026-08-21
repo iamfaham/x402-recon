@@ -8,6 +8,7 @@ from ledger.evaluate import (
     render_axis_results,
     render_evaluation,
     score,
+    service_confidence_verdict,
     time_cluster_verdict,
 )
 from ledger.models import (
@@ -409,3 +410,80 @@ def test_render_axis_results_reports_service_axis_unscored_when_none():
     payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
     text = render_axis_results(AxisResults(payer=payer, service=None))
     assert "service groupings are unscored" in text.lower()
+
+
+# --- Task 2: service_confidence_verdict / service recall wording -----------
+
+
+def _memo_result(predicted, truth):
+    return score(
+        predicted,
+        truth,
+        dict.fromkeys(predicted, DESCRIPTIVE),
+        dict.fromkeys(predicted, RULE_MEMO_MATCH),
+    )
+
+
+def test_service_verdict_passes_at_or_above_the_floor():
+    # 25 payments, all grouped correctly -> precision 1.0.
+    predicted = {f"s{i}": "svc" for i in range(25)}
+    truth = {f"s{i}": "X" for i in range(25)}
+
+    verdict = service_confidence_verdict(_memo_result(predicted, truth))
+
+    assert verdict is not None
+    precision, count, passes = verdict
+    assert precision == 1.0
+    assert count == 25
+    assert passes is True
+
+
+def test_service_verdict_fails_below_the_floor():
+    # 24 correct plus one merged stranger drags precision under 0.95.
+    predicted = {f"s{i}": "svc" for i in range(24)}
+    truth = {f"s{i}": "X" for i in range(24)}
+    predicted["odd"] = "svc"
+    truth["odd"] = "Y"
+
+    verdict = service_confidence_verdict(_memo_result(predicted, truth))
+
+    assert verdict is not None
+    precision, count, passes = verdict
+    assert precision < CALIBRATION_THRESHOLD
+    assert count == 25
+    assert passes is False
+
+
+def test_service_verdict_withholds_below_the_minimum_sample():
+    # Perfect precision, but too few firings for the number to mean anything.
+    predicted = {f"s{i}": "svc" for i in range(5)}
+    truth = {f"s{i}": "X" for i in range(5)}
+
+    verdict = service_confidence_verdict(_memo_result(predicted, truth))
+
+    assert verdict is not None
+    precision, count, passes = verdict
+    assert precision == 1.0
+    assert count == 5
+    assert passes is False  # withheld: sample below MIN_VERDICT_SAMPLE
+
+
+def test_service_verdict_is_none_when_memo_match_never_fired():
+    predicted = {"a": UNCATEGORIZED}
+    truth = {"a": UNGROUPABLE}
+    result = score(
+        predicted,
+        truth,
+        {"a": DESCRIPTIVE},
+        {"a": "none"},
+    )
+    assert service_confidence_verdict(result) is None
+
+
+def test_service_axis_recall_description_says_service():
+    # This figure sits in the section whose whole point is that it does NOT
+    # answer a payer question.
+    result = _memo_result({"a": "svc", "b": "svc"}, {"a": "X", "b": "X"})
+    text = render_evaluation(result, claims_confidence=False)
+    assert "from one service" in text
+    assert "from one payer" not in text
