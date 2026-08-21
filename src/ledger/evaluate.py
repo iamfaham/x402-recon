@@ -40,8 +40,7 @@ CALIBRATION_THRESHOLD = 0.95
 # A verdict needs evidence. Below this many scored transactions the rule's
 # precision is a coin-flip artifact, so the criterion withholds judgment
 # rather than asserting one. This gate can only ever WITHHOLD a verdict,
-# never manufacture a favourable one - the 0.70 threshold above is
-# untouched and stays exactly as pre-registered.
+# never manufacture a favourable one.
 MIN_VERDICT_SAMPLE = 20
 
 
