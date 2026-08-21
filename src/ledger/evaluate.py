@@ -27,16 +27,14 @@ from ledger.models import (
     AXIS_SERVICE,
     CONFIDENT,
     RULE_MEMO_MATCH,
-    RULE_TIME_CLUSTER,
     UNCATEGORIZED,
     UNGROUPABLE,
 )
 
 # Pre-registered in docs/superpowers/specs/2026-08-19-ledger-v0.1a-design.md
-# and fixed on 2026-08-19, BEFORE any measurement was taken. They are constants
-# rather than judgment calls precisely so the result cannot be rationalized
-# once the number is known. Do not adjust them to fit an outcome.
-TIME_CLUSTER_THRESHOLD = 0.70
+# and fixed on 2026-08-19, BEFORE any measurement was taken. It is a constant
+# rather than a judgment call precisely so the result cannot be rationalized
+# once the number is known. Do not adjust it to fit an outcome.
 CALIBRATION_THRESHOLD = 0.95
 
 # A verdict needs evidence. Below this many scored transactions the rule's
@@ -165,17 +163,6 @@ def score(
     )
 
 
-def time_cluster_verdict(result: EvaluationResult) -> tuple[float, bool] | None:
-    """Apply the pre-registered criterion. None when the rule never fired.
-
-    Returns (measured B-cubed precision, whether it clears the threshold).
-    """
-    for metrics in result.per_rule:
-        if metrics.rule == RULE_TIME_CLUSTER:
-            return metrics.precision, metrics.precision >= TIME_CLUSTER_THRESHOLD
-    return None
-
-
 def service_confidence_verdict(
     result: EvaluationResult,
 ) -> tuple[float, int, bool] | None:
@@ -187,9 +174,8 @@ def service_confidence_verdict(
     The criterion reuses CALIBRATION_THRESHOLD rather than inventing a number:
     a rule that could not survive the floor it would then be subject to has no
     business claiming confidence in the first place. Withholds below
-    MIN_VERDICT_SAMPLE for the same reason time_cluster does - a precision
-    computed over a handful of rows is a coin flip, and withholding can only
-    ever deny a claim, never manufacture one.
+    MIN_VERDICT_SAMPLE - a precision computed over a handful of rows is a coin
+    flip, and withholding can only ever deny a claim, never manufacture one.
     """
     for metrics in result.per_rule:
         if metrics.rule == RULE_MEMO_MATCH:
@@ -339,29 +325,6 @@ def _render_evaluation_body(result: EvaluationResult, claims_confidence: bool) -
                 f"    {'ordinary':<10} {ordinary_str}"
                 f"  ({metrics.ordinary_count})"
             )
-
-    verdict = time_cluster_verdict(result)
-    if verdict is not None:
-        precision, passes = verdict
-        count = next(
-            (m.count for m in result.per_rule if m.rule == RULE_TIME_CLUSTER), 0
-        )
-        if count < MIN_VERDICT_SAMPLE:
-            lines += [
-                "",
-                f"Pre-registered criterion: time_cluster B-cubed precision "
-                f"{precision:.1%} on {count} payments - "
-                f"INSUFFICIENT DATA (need {MIN_VERDICT_SAMPLE}) - "
-                "no verdict recorded",
-            ]
-        else:
-            outcome = "PASSES" if passes else "FAILS"
-            lines += [
-                "",
-                f"Pre-registered criterion: time_cluster B-cubed precision "
-                f"{precision:.1%} on {count} payments - {outcome} threshold "
-                f"{TIME_CLUSTER_THRESHOLD:.2f}",
-            ]
 
     if not claims_confidence:
         service = service_confidence_verdict(result)

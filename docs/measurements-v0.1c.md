@@ -546,3 +546,59 @@ uv run pytest -q
 Run both immediately after the `simulate.py` floor fix and confirmed unaffected by
 any of the measurement runs above (measurement runs only touch the gitignored
 `sample/` directory and never modify source).
+
+---
+
+## Decision: time_cluster
+
+Measured at the canonical count: B-cubed precision 70.0% on 32 payments.
+Pre-registered criterion: >= 0.70 with at least 20 firings.
+
+Verdict: REMOVED
+
+The literal canonical measurement (seed=42, count=300) clears 0.70 by exactly
+0.0 points - the smallest possible margin. The evidence gathered alongside it,
+all commissioned before any number was known, shows this is not a robust pass:
+
+- Across seeds 1-20 at the canonical count, the median is 69.4% - below 0.70.
+- 11 of the 19 seeds that clear the firing bar FAIL; only 8 pass.
+- Precision spans 59.1% to 85.7% - a 26.6-point range.
+- Precision degrades as volume rises: 70.0% at count 300, 59.3% at 500, 52.7%
+  at 800 - a systematic trend, not noise. At the larger volumes a real
+  business would have, the rule gets worse, not better.
+
+Seed 42 at count 300 is the single most favourable configuration measured,
+and it passes by nothing. Keeping the rule on the strength of that one draw
+would mean cherry-picking the one favourable measurement out of a set
+commissioned in advance - exactly the rationalisation pre-registration exists
+to prevent. `time_cluster` is therefore removed from the payer cascade, which
+now reads `sender_match` -> `none`.
+
+The rule fails its pre-registered threshold on adequate evidence, so it is
+removed. Payments it used to group now fall to "not identified", which raises
+declined coverage and lowers recall - an honest trade: the tool now declines
+rather than guessing wrong. v0.1a de-risked this branch by redefining
+calibration absolutely rather than as a contrast between tiers, so removing
+the only uncertain rule leaves calibration intact.
+
+### Post-removal re-measurement (count=300, seed=42)
+
+Same dataset and seed as the canonical pre-removal run, re-simulated,
+re-ingested, re-categorized, and re-evaluated against the cascade with
+`time_cluster` deleted.
+
+| metric | before (with time_cluster) | after (removed) | delta |
+|---|---|---|---|
+| Payer precision | 96.8% | 100.0% | +3.2 pts |
+| Payer recall | 96.6% | 95.7% | -0.9 pts |
+| Declined coverage | 100.0% (153 payments declined) | 94.6% (185 payments declined) | -5.4 pts, +32 declined |
+| Confident-tier (`sender_match`) precision | 100.0% (115 payments) | 100.0% (115 payments) | unchanged |
+
+The 32 payments `time_cluster` used to claim now fall through to `none` and
+are declined. `sender_match` is untouched - it never depended on
+`time_cluster` and its precision, recall, and count are identical before and
+after. Overall payer precision rises because the removed rule's 70.0%
+precision was dragging the aggregate down; recall and declined coverage both
+move against the tool, which is the expected cost of a rule that guessed
+wrong roughly three times in ten now declining instead. `MIN_VERDICT_SAMPLE`
+and `CALIBRATION_THRESHOLD` are unchanged by this decision.

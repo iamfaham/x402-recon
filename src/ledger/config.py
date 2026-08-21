@@ -12,7 +12,6 @@ class CascadeConfig:
     """Thresholds controlling when a rule is willing to claim confidence."""
 
     min_occurrences: int = 2
-    time_window_minutes: int = 5
     generic_memos: frozenset[str] = field(
         default_factory=lambda: frozenset(
             {"", "payment", "x402", "n/a", "-", "none", "tx", "transfer"}

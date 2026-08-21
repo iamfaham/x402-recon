@@ -19,7 +19,6 @@ def tx(tx_hash: str, sender: str, memo: str | None = None, ts: str = "2026-08-18
 
 def test_default_config_values():
     assert DEFAULT_CONFIG.min_occurrences == 2
-    assert DEFAULT_CONFIG.time_window_minutes == 5
 
 
 def test_none_memo_is_generic():
@@ -62,7 +61,6 @@ def test_memo_counts_excludes_generic_memos():
 
 from ledger.categorize import (
     categorize_transactions,
-    find_time_clusters,
     run_categorize,
 )
 from ledger.models import (
@@ -70,7 +68,6 @@ from ledger.models import (
     RULE_MEMO_MATCH,
     RULE_NONE,
     RULE_SENDER_MATCH,
-    RULE_TIME_CLUSTER,
     UNCATEGORIZED,
     UNCERTAIN,
 )
@@ -131,18 +128,20 @@ def test_sender_match_and_memo_match_are_independent_axes():
     assert service["0x1"].rule_matched == RULE_MEMO_MATCH
 
 
-def test_time_clustered_one_off_senders_are_uncertain():
+def test_no_payer_row_carries_time_cluster():
+    # Pins the v0.1c removal: time_cluster failed its pre-registered
+    # criterion (70.0% precision, but the seed sweep showed 11/19 seeds
+    # failing at the identical count) and was deleted from the cascade.
+    # Transactions that used to fall into a time-proximity cluster must now
+    # fall through to "none" rather than resurrect the rule under any label.
     txns = [
         tx("0x1", "0xa", ts="2026-08-18T10:00:00Z"),
         tx("0x2", "0xb", ts="2026-08-18T10:01:00Z"),
         tx("0x3", "0xc", ts="2026-08-18T10:02:00Z"),
     ]
     payer = [c for c in categorize_transactions(txns) if c.axis == AXIS_PAYER]
-    result = by_hash(payer, txns)
-
-    assert result["0x1"].rule_matched == RULE_TIME_CLUSTER
-    assert result["0x1"].confidence_tier == UNCERTAIN
-    assert result["0x1"].category_label.startswith("cluster:")
+    assert payer
+    assert all(c.rule_matched != "time_cluster" for c in payer)
 
 
 def test_isolated_transaction_is_uncategorized_not_forced_into_a_bucket():
@@ -156,17 +155,6 @@ def test_isolated_transaction_is_uncategorized_not_forced_into_a_bucket():
     assert result["0x1"].rule_matched == RULE_NONE
     assert result["0x1"].category_label == UNCATEGORIZED
     assert result["0x1"].confidence_tier == UNCERTAIN
-
-
-def test_find_time_clusters_ignores_gaps_beyond_the_window():
-    txns = [
-        tx("0x1", "0xa", ts="2026-08-18T10:00:00Z"),
-        tx("0x2", "0xb", ts="2026-08-18T10:02:00Z"),
-        tx("0x3", "0xc", ts="2026-08-18T12:00:00Z"),
-    ]
-    clusters = find_time_clusters(txns, DEFAULT_CONFIG)
-    assert clusters["0x1"] == clusters["0x2"]
-    assert "0x3" not in clusters
 
 
 def test_run_categorize_is_idempotent(tmp_path):
@@ -191,7 +179,7 @@ def test_run_categorize_is_idempotent(tmp_path):
     assert count == 4
 
 
-from ledger.categorize import categorize_payers, categorize_services
+from ledger.categorize import categorize_services
 from ledger.models import AXIS_PAYER, AXIS_SERVICE, DESCRIPTIVE
 
 
@@ -241,17 +229,6 @@ def test_service_rows_never_claim_confidence():
     service = [c for c in categorize_transactions(txns) if c.axis == AXIS_SERVICE]
     assert service
     assert all(c.confidence_tier == DESCRIPTIVE for c in service)
-
-
-def test_payer_axis_still_falls_through_to_time_cluster():
-    txns = [
-        tx("0x1", "0xa", ts="2026-08-18T10:00:00Z"),
-        tx("0x2", "0xb", ts="2026-08-18T10:01:00Z"),
-        tx("0x3", "0xc", ts="2026-08-18T10:02:00Z"),
-    ]
-    payer = by_axis([c for c in categorize_payers(txns, DEFAULT_CONFIG, "now") if c.transaction_id == 1])
-    assert payer[AXIS_PAYER].rule_matched == RULE_TIME_CLUSTER
-    assert payer[AXIS_PAYER].confidence_tier == UNCERTAIN
 
 
 def test_a_transaction_with_no_usable_memo_is_uncategorized_on_the_service_axis():

@@ -47,7 +47,6 @@ UNCATEGORIZED = "uncategorized"
 # Cascade rule names.
 RULE_SENDER_MATCH = "sender_match"
 RULE_MEMO_MATCH = "memo_match"
-RULE_TIME_CLUSTER = "time_cluster"
 RULE_NONE = "none"
 
 # Transaction direction.
