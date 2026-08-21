@@ -257,17 +257,18 @@ def generate_batch(
     # services. memo_match merges them; service truth says they belong apart.
     # Their senders repeat, so sender_match claims them on the payer axis and
     # time_cluster is left untouched - the hazard is payer-axis-neutral.
-    per_agent = max(2, hazards.shared_memo_different_services // 2)
-    for index, service in enumerate(_SHARED_MEMO_SERVICES):
-        sender = _address(rng)
-        b.burst(
-            sender,
-            _SHARED_MEMO,
-            f"agent-sharedmemo-{index}",
-            per_agent,
-            hazard=HAZARD_SHARED_MEMO_DIFFERENT_SERVICES,
-            service=service,
-        )
+    if hazards.shared_memo_different_services:
+        per_agent = max(2, hazards.shared_memo_different_services // 2)
+        for index, service in enumerate(_SHARED_MEMO_SERVICES):
+            sender = _address(rng)
+            b.burst(
+                sender,
+                _SHARED_MEMO,
+                f"agent-sharedmemo-{index}",
+                per_agent,
+                hazard=HAZARD_SHARED_MEMO_DIFFERENT_SERVICES,
+                service=service,
+            )
 
     # HAZARD: one-off payers scattered across the window. Because everything
     # shares one timeline, these land inside real agent bursts — giving
