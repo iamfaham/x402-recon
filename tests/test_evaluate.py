@@ -3,19 +3,16 @@ import pytest
 from ledger.evaluate import (
     CALIBRATION_THRESHOLD,
     MIN_VERDICT_SAMPLE,
-    TIME_CLUSTER_THRESHOLD,
     AxisResults,
     render_axis_results,
     render_evaluation,
     score,
-    time_cluster_verdict,
+    service_confidence_verdict,
 )
 from ledger.models import (
     CONFIDENT,
-    DESCRIPTIVE,
     RULE_MEMO_MATCH,
     RULE_SENDER_MATCH,
-    RULE_TIME_CLUSTER,
     UNCATEGORIZED,
     UNCERTAIN,
     UNGROUPABLE,
@@ -134,21 +131,21 @@ def test_per_rule_metrics_are_reported_separately():
         rules={
             "a": RULE_SENDER_MATCH,
             "b": RULE_SENDER_MATCH,
-            "c": RULE_TIME_CLUSTER,
-            "d": RULE_TIME_CLUSTER,
+            "c": RULE_MEMO_MATCH,
+            "d": RULE_MEMO_MATCH,
         },
     )
     by_rule = {m.rule: m for m in result.per_rule}
     assert by_rule[RULE_SENDER_MATCH].precision == 1.0
-    assert by_rule[RULE_TIME_CLUSTER].precision == 0.5
-    assert by_rule[RULE_TIME_CLUSTER].count == 2
+    assert by_rule[RULE_MEMO_MATCH].precision == 0.5
+    assert by_rule[RULE_MEMO_MATCH].count == 2
 
 
 def test_hazard_split_separates_fragility_from_failure():
     result = build(
         {"a": "g1", "b": "g1", "c": "g2", "d": "g2"},
         {"a": "X", "b": "X", "c": "Y", "d": "Z"},
-        rules=dict.fromkeys("abcd", RULE_TIME_CLUSTER),
+        rules=dict.fromkeys("abcd", RULE_MEMO_MATCH),
         hazards={"c": "shared_memo_strangers", "d": "shared_memo_strangers"},
     )
     metrics = result.per_rule[0]
@@ -171,35 +168,7 @@ def test_missing_hazards_degrades_cleanly():
     assert result.per_rule[0].hazard_count == 0
 
 
-def test_time_cluster_verdict_fails_below_threshold():
-    result = build(
-        {"a": "g1", "b": "g1", "c": "g1", "d": "g1"},
-        {"a": "X", "b": "X", "c": "Y", "d": "Z"},
-        rules=dict.fromkeys("abcd", RULE_TIME_CLUSTER),
-    )
-    precision, passes = time_cluster_verdict(result)
-    assert precision < TIME_CLUSTER_THRESHOLD
-    assert passes is False
-
-
-def test_time_cluster_verdict_passes_at_or_above_threshold():
-    result = build(
-        {"a": "g1", "b": "g1", "c": "g1", "d": "g1"},
-        {"a": "X", "b": "X", "c": "X", "d": "X"},
-        rules=dict.fromkeys("abcd", RULE_TIME_CLUSTER),
-    )
-    precision, passes = time_cluster_verdict(result)
-    assert precision == 1.0
-    assert passes is True
-
-
-def test_time_cluster_verdict_is_none_when_rule_never_fired():
-    result = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
-    assert time_cluster_verdict(result) is None
-
-
 def test_thresholds_are_the_pre_registered_values():
-    assert TIME_CLUSTER_THRESHOLD == 0.70
     assert CALIBRATION_THRESHOLD == 0.95
 
 
@@ -223,49 +192,6 @@ def test_render_warns_below_the_calibration_threshold():
 def test_render_is_silent_above_the_calibration_threshold():
     text = render_evaluation(build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"}))
     assert "WARNING" not in text
-
-
-def _sample_ids(n):
-    return [f"t{i}" for i in range(n)]
-
-
-def test_render_prints_a_computed_time_cluster_verdict():
-    # Needs >= MIN_VERDICT_SAMPLE (20) firings for a verdict to be recorded
-    # at all (C2a) - four transactions is a coin-flip sample and would now
-    # print INSUFFICIENT DATA rather than FAILS.
-    ids = _sample_ids(MIN_VERDICT_SAMPLE)
-    predicted = {i: "g1" for i in ids}
-    # Half land in true group X (correct), half in true group Y (wrong) -
-    # each predicted-group member's precision is 0.5, well under threshold.
-    truth = {i: ("X" if idx % 2 == 0 else "Y") for idx, i in enumerate(ids)}
-    result = build(predicted, truth, rules=dict.fromkeys(ids, RULE_TIME_CLUSTER))
-    text = render_evaluation(result)
-    assert "FAILS" in text
-    assert "0.70" in text
-    assert f"{MIN_VERDICT_SAMPLE} payments" in text
-
-
-def test_render_withholds_verdict_below_the_minimum_sample():
-    result = build(
-        {"a": "g1", "b": "g1", "c": "g1", "d": "g1"},
-        {"a": "X", "b": "X", "c": "Y", "d": "Z"},
-        rules=dict.fromkeys("abcd", RULE_TIME_CLUSTER),
-    )
-    text = render_evaluation(result)
-    assert "INSUFFICIENT DATA" in text
-    assert "PASSES" not in text
-    assert "FAILS" not in text
-    assert f"need {MIN_VERDICT_SAMPLE}" in text
-
-
-def test_render_prints_verdict_at_exactly_the_minimum_sample():
-    ids = _sample_ids(MIN_VERDICT_SAMPLE)
-    predicted = {i: "g1" for i in ids}
-    truth = {i: "X" for i in ids}  # perfect precision, clears threshold
-    result = build(predicted, truth, rules=dict.fromkeys(ids, RULE_TIME_CLUSTER))
-    text = render_evaluation(result)
-    assert "PASSES" in text
-    assert "INSUFFICIENT DATA" not in text
 
 
 def test_render_shows_per_rule_breakdown():
@@ -339,13 +265,14 @@ def test_a_diluted_bad_rule_is_caught_per_rule():
     assert [m.rule for m in failing] == [RULE_MEMO_MATCH]
 
 
-def test_descriptive_rules_are_never_flagged_by_the_floor():
-    # The service axis claims no confidence, so a threshold it was never asked
-    # to clear must not warn about it.
+def test_non_confident_rules_are_never_flagged_by_the_floor():
+    # failing_confident_rules only warns about rules tiered CONFIDENT. A rule
+    # whose rows are tiered UNCERTAIN was never claiming confidence, so a
+    # threshold it was never asked to clear must not warn about it.
     result = build(
         {"a": "g1", "b": "g1", "c": "g1"},
         {"a": "X", "b": "Y", "c": "Z"},
-        tiers=dict.fromkeys("abc", DESCRIPTIVE),
+        tiers=dict.fromkeys("abc", UNCERTAIN),
         rules=dict.fromkeys("abc", RULE_MEMO_MATCH),
     )
     assert result.per_rule[0].precision < CALIBRATION_THRESHOLD
@@ -385,7 +312,10 @@ def test_render_evaluation_still_shows_calibration_by_default():
     assert "Confident tier precision" in text
 
 
-def test_render_axis_results_shows_both_axis_headers_and_no_service_calibration():
+def test_render_axis_results_shows_both_axis_headers_and_both_calibrations():
+    # v0.1c: the service axis earned its confidence claim (memo_match cleared
+    # the calibration floor at the canonical count), so it now carries a
+    # calibration section just like the payer axis.
     payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
     service = build({"a": "s1", "b": "s1"}, {"a": "S", "b": "S"})
     text = render_axis_results(AxisResults(payer=payer, service=service))
@@ -393,13 +323,10 @@ def test_render_axis_results_shows_both_axis_headers_and_no_service_calibration(
     assert "Who paid you" in text
     assert "What they paid for" in text
 
-    # The service block must carry no calibration section at all.
     service_block = text.split("What they paid for", 1)[1]
-    assert "Calibration" not in service_block
-    assert "Confident tier precision" not in service_block
+    assert "Calibration" in service_block
+    assert "Confident tier precision" in service_block
 
-    # And the payer block (before the service section) still has one, since
-    # the payer axis claims confidence.
     payer_block = text.split("What they paid for", 1)[0]
     assert "Calibration" in payer_block
     assert "Confident tier precision" in payer_block
@@ -409,3 +336,132 @@ def test_render_axis_results_reports_service_axis_unscored_when_none():
     payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
     text = render_axis_results(AxisResults(payer=payer, service=None))
     assert "service groupings are unscored" in text.lower()
+
+
+# --- Task 2: service_confidence_verdict / service recall wording -----------
+
+
+def _memo_result(predicted, truth):
+    # memo_match rows are tiered CONFIDENT now that the service axis has
+    # earned its confidence claim (v0.1c).
+    return score(
+        predicted,
+        truth,
+        dict.fromkeys(predicted, CONFIDENT),
+        dict.fromkeys(predicted, RULE_MEMO_MATCH),
+    )
+
+
+def test_service_verdict_passes_at_or_above_the_floor():
+    # 25 payments, all grouped correctly -> precision 1.0.
+    predicted = {f"s{i}": "svc" for i in range(25)}
+    truth = {f"s{i}": "X" for i in range(25)}
+
+    verdict = service_confidence_verdict(_memo_result(predicted, truth))
+
+    assert verdict is not None
+    precision, count, passes = verdict
+    assert precision == 1.0
+    assert count == 25
+    assert passes is True
+
+
+def test_service_verdict_fails_below_the_floor():
+    # 24 correct plus one merged stranger drags precision under 0.95.
+    predicted = {f"s{i}": "svc" for i in range(24)}
+    truth = {f"s{i}": "X" for i in range(24)}
+    predicted["odd"] = "svc"
+    truth["odd"] = "Y"
+
+    verdict = service_confidence_verdict(_memo_result(predicted, truth))
+
+    assert verdict is not None
+    precision, count, passes = verdict
+    assert precision < CALIBRATION_THRESHOLD
+    assert count == 25
+    assert passes is False
+
+
+def test_service_verdict_withholds_below_the_minimum_sample():
+    # Perfect precision, but too few firings for the number to mean anything.
+    predicted = {f"s{i}": "svc" for i in range(5)}
+    truth = {f"s{i}": "X" for i in range(5)}
+
+    verdict = service_confidence_verdict(_memo_result(predicted, truth))
+
+    assert verdict is not None
+    precision, count, passes = verdict
+    assert precision == 1.0
+    assert count == 5
+    assert passes is False  # withheld: sample below MIN_VERDICT_SAMPLE
+
+
+def test_service_verdict_is_none_when_memo_match_never_fired():
+    predicted = {"a": UNCATEGORIZED}
+    truth = {"a": UNGROUPABLE}
+    result = score(
+        predicted,
+        truth,
+        {"a": UNCERTAIN},
+        {"a": "none"},
+    )
+    assert service_confidence_verdict(result) is None
+
+
+def test_service_axis_recall_description_says_service():
+    # This figure sits in the section whose whole point is that it does NOT
+    # answer a payer question. `subject` is now explicit, since both axes
+    # claim confidence and claims_confidence no longer distinguishes them.
+    result = _memo_result({"a": "svc", "b": "svc"}, {"a": "X", "b": "X"})
+    text = render_evaluation(result, subject="service")
+    assert "from one service" in text
+    assert "from one payer" not in text
+
+
+# --- Item 1: pre-registered criterion line, via render_axis_results --------
+#
+# Mirrors the shape of the deleted v0.1b tests
+# (test_render_prints_a_computed_time_cluster_verdict,
+# test_render_withholds_verdict_below_the_minimum_sample,
+# test_render_prints_verdict_at_exactly_the_minimum_sample), but asserts on
+# render_axis_results so the subject="service" wiring is covered end-to-end,
+# not just service_confidence_verdict in isolation.
+
+
+def test_render_axis_results_prints_earns_at_or_above_the_floor():
+    payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
+    predicted = {f"s{i}": "svc" for i in range(25)}
+    truth = {f"s{i}": "X" for i in range(25)}
+    service = _memo_result(predicted, truth)
+
+    text = render_axis_results(AxisResults(payer=payer, service=service))
+
+    assert "EARNS" in text
+    assert "DOES NOT EARN" not in text
+    assert "0.95" in text
+
+
+def test_render_axis_results_prints_does_not_earn_below_the_floor():
+    payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
+    predicted = {f"s{i}": "svc" for i in range(24)}
+    truth = {f"s{i}": "X" for i in range(24)}
+    predicted["odd"] = "svc"
+    truth["odd"] = "Y"
+    service = _memo_result(predicted, truth)
+
+    text = render_axis_results(AxisResults(payer=payer, service=service))
+
+    assert "DOES NOT EARN" in text
+
+
+def test_render_axis_results_withholds_verdict_below_the_minimum_sample():
+    payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
+    predicted = {f"s{i}": "svc" for i in range(5)}
+    truth = {f"s{i}": "X" for i in range(5)}
+    service = _memo_result(predicted, truth)
+
+    text = render_axis_results(AxisResults(payer=payer, service=service))
+
+    assert "INSUFFICIENT DATA" in text
+    assert f"need {MIN_VERDICT_SAMPLE}" in text
+    assert "EARNS" not in text

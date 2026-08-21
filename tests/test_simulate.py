@@ -2,6 +2,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 from ledger.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND, UNGROUPABLE
 from ledger.simulate import (
     HAZARD_INTERLEAVED_ONE_OFF,
@@ -205,10 +207,9 @@ def test_memo_drift_is_seen_by_memo_match_not_intercepted_by_sender_match():
     #
     # memo_match now runs only on the service axis (a shared memo identifies a
     # service, not a payer), so the two axes are checked separately: the payer
-    # axis must never claim sender_match for these transactions (it may fall
-    # through to time_cluster or none, which is expected now that memo_match
-    # no longer intercepts on that axis), and the service axis is where
-    # memo_match is expected to fire.
+    # axis must never claim sender_match for these transactions (it falls
+    # through to none, since time_cluster was removed in v0.1c), and the
+    # service axis is where memo_match is expected to fire.
     batch = generate_batch(count=120, seed=1)
     tagged = [
         t for t in batch.transactions
@@ -227,7 +228,6 @@ def test_memo_drift_is_seen_by_memo_match_not_intercepted_by_sender_match():
         RULE_MEMO_MATCH,
         RULE_NONE,
         RULE_SENDER_MATCH,
-        RULE_TIME_CLUSTER,
     )
 
     import dataclasses
@@ -241,7 +241,7 @@ def test_memo_drift_is_seen_by_memo_match_not_intercepted_by_sender_match():
 
     payer_rules_seen = {by_hash_axis[(t.tx_hash, AXIS_PAYER)].rule_matched for t in tagged}
     assert RULE_SENDER_MATCH not in payer_rules_seen
-    assert payer_rules_seen <= {RULE_TIME_CLUSTER, RULE_NONE}
+    assert payer_rules_seen <= {RULE_NONE}
 
     service_rules_seen = {by_hash_axis[(t.tx_hash, AXIS_SERVICE)].rule_matched for t in tagged}
     assert service_rules_seen <= {RULE_MEMO_MATCH, RULE_NONE}
@@ -263,10 +263,13 @@ def test_amounts_span_sub_cent_to_large():
     assert max(amounts) > 1_000_000    # over a dollar
 
 
-def test_hazards_are_a_minority_of_the_dataset():
+@pytest.mark.parametrize("count", [120, 300])
+def test_hazards_are_a_minority_of_the_dataset(count):
     # A dataset where everything is adversarial cannot tell you which weakness
-    # matters. Ordinary traffic must stay the bulk of it.
-    batch = generate_batch(count=120, seed=1)
+    # matters. Ordinary traffic must stay the bulk of it. Pinned at both the
+    # old canonical count (120) and the v0.1c canonical count (300, measured
+    # at 20.3% - see docs/measurements-v0.1c.md).
+    batch = generate_batch(count=count, seed=1)
     assert len(batch.hazards) < len(batch.transactions) / 2
 
 
@@ -360,3 +363,63 @@ def test_write_batch_writes_all_four_files(tmp_path: Path):
     assert st_path.exists()
     assert st_path.name == "service_truth.json"
     assert json.loads(st_path.read_text()) == batch.service_truth
+
+
+from ledger.simulate import HAZARD_SHARED_MEMO_DIFFERENT_SERVICES
+
+
+def _shared_memo_diff_services(batch):
+    return [
+        t for t in batch.transactions
+        if batch.hazards.get(t.tx_hash) == HAZARD_SHARED_MEMO_DIFFERENT_SERVICES
+    ]
+
+
+def test_one_memo_covers_two_different_services():
+    # The only hazard shape that can reduce service precision: a MERGE.
+    # Every other generator derives service truth from the memo, so memo and
+    # service agree and precision cannot fall.
+    batch = generate_batch(count=120, seed=1)
+    tagged = _shared_memo_diff_services(batch)
+
+    assert len(tagged) >= 4
+    assert len({t.memo for t in tagged}) == 1
+    assert len({batch.service_truth[t.tx_hash] for t in tagged}) >= 2
+
+
+def test_its_true_services_are_used_by_nothing_else():
+    # Reusing an existing service would enlarge that service's true group and
+    # depress the recall of unrelated transactions, spreading the hazard's
+    # effect instead of isolating it to precision.
+    batch = generate_batch(count=120, seed=1)
+    tagged = _shared_memo_diff_services(batch)
+    hazard_services = {batch.service_truth[t.tx_hash] for t in tagged}
+
+    others = {
+        batch.service_truth[t.tx_hash]
+        for t in batch.transactions
+        if batch.hazards.get(t.tx_hash) != HAZARD_SHARED_MEMO_DIFFERENT_SERVICES
+    }
+    assert hazard_services.isdisjoint(others)
+
+
+def test_it_is_payer_axis_neutral():
+    # Its senders repeat, so sender_match claims them on the payer axis
+    # regardless of this hazard's presence. (time_cluster, which used to fire
+    # on repeating senders too, was removed in v0.1c after failing its
+    # pre-registered criterion; see docs/measurements-v0.1c.md.)
+    from collections import Counter
+
+    batch = generate_batch(count=120, seed=1)
+    tagged = _shared_memo_diff_services(batch)
+    counts = Counter(t.sender_address for t in batch.transactions)
+
+    assert tagged
+    for tx in tagged:
+        assert counts[tx.sender_address] >= 2
+
+
+def test_its_payers_are_genuinely_different():
+    batch = generate_batch(count=120, seed=1)
+    tagged = _shared_memo_diff_services(batch)
+    assert len({batch.ground_truth[t.tx_hash] for t in tagged}) >= 2

@@ -16,7 +16,6 @@ from ledger.models import (
     AXIS_PAYER,
     AXIS_SERVICE,
     CONFIDENT,
-    DESCRIPTIVE,
     RULE_NONE,
     TX_TYPE_PAYMENT,
     TX_TYPE_REFUND,
@@ -42,7 +41,7 @@ SELECT t.tx_hash, t.timestamp, t.sender_address, t.memo, t.amount_micro_usdc,
        COALESCE(p.confidence_tier, '{UNCERTAIN}')     AS payer_tier,
        COALESCE(p.rule_matched, '{RULE_NONE}')        AS payer_rule,
        COALESCE(s.category_label, '{UNCATEGORIZED}')  AS service_label,
-       COALESCE(s.confidence_tier, '{DESCRIPTIVE}')   AS service_tier,
+       COALESCE(s.confidence_tier, '{UNCERTAIN}')     AS service_tier,
        COALESCE(s.rule_matched, '{RULE_NONE}')        AS service_rule
 FROM transactions t
 LEFT JOIN categorizations p
@@ -168,9 +167,9 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
 def _format_line(line: CategoryLine, axis: str) -> str:
     """Render one breakdown row.
 
-    The [needs review] marker is gated on UNCERTAIN specifically rather than on
-    "not CONFIDENT". DESCRIPTIVE is neither confident nor uncertain, and marking
-    service groupings for review would express a doubt the tool is not claiming.
+    The [needs review] marker is gated on UNCERTAIN specifically. Both axes now
+    tier the same way - CONFIDENT for a claimed grouping, UNCERTAIN for a
+    declined one - so this reads identically for payer and service rows.
     """
     if line.category_label == UNCATEGORIZED:
         name = "Not identified" if axis == AXIS_PAYER else "No service identified"
@@ -213,8 +212,8 @@ def render_summary(data: ReportData) -> str:
         f"  ({data.refund_count} {_refunds(data.refund_count)})",
         f"Net received:       {format_usdc(data.net_micro_usdc)}",
         "",
-        f"  Confidently identified: {format_usdc(data.confident_micro_usdc)}",
-        f"  Needs review:           {format_usdc(data.uncertain_micro_usdc)}",
+        f"  Confidently identified (who paid you): {format_usdc(data.confident_micro_usdc)}",
+        f"  Needs review (who paid you):           {format_usdc(data.uncertain_micro_usdc)}",
     ]
 
     lines += [
@@ -235,8 +234,9 @@ def render_summary(data: ReportData) -> str:
 
     lines += [
         "",
-        "Anything marked [needs review] could not be confidently matched to a",
-        "single payer. Please confirm these before relying on the totals.",
+        "Each section marks its own [needs review] rows. A payment can appear",
+        "in both - once because its payer is unconfirmed, once because its",
+        "service is. The two sets overlap, so do not add them together.",
         "",
         "This report organizes payment data you have already received.",
         "It is not tax or accounting advice.",

@@ -22,15 +22,6 @@ UNGROUPABLE = "__ungroupable__"
 CONFIDENT = "confident"
 UNCERTAIN = "uncertain"
 
-# A grouping that is stated, not claimed. The row records how the grouping was
-# formed without asserting how far to trust it.
-#
-# Deliberately distinct from UNCERTAIN. Uncertain means the tool guessed and
-# knows it might be wrong; descriptive means it is not guessing at all, only
-# reporting what the payer's memo said. Collapsing the two would tell a reader
-# the service axis is unreliable, which is a different false claim.
-DESCRIPTIVE = "descriptive"
-
 # Grouping axes. A transaction carries one categorization per axis: who paid
 # (payer) and what they paid for (service). Collapsing these into one field is
 # what let a service grouping be reported as a confident payer identification.
@@ -47,7 +38,6 @@ UNCATEGORIZED = "uncategorized"
 # Cascade rule names.
 RULE_SENDER_MATCH = "sender_match"
 RULE_MEMO_MATCH = "memo_match"
-RULE_TIME_CLUSTER = "time_cluster"
 RULE_NONE = "none"
 
 # Transaction direction.

@@ -26,23 +26,21 @@ from ledger.models import (
     AXIS_PAYER,
     AXIS_SERVICE,
     CONFIDENT,
-    RULE_TIME_CLUSTER,
+    RULE_MEMO_MATCH,
     UNCATEGORIZED,
     UNGROUPABLE,
 )
 
 # Pre-registered in docs/superpowers/specs/2026-08-19-ledger-v0.1a-design.md
-# and fixed on 2026-08-19, BEFORE any measurement was taken. They are constants
-# rather than judgment calls precisely so the result cannot be rationalized
-# once the number is known. Do not adjust them to fit an outcome.
-TIME_CLUSTER_THRESHOLD = 0.70
+# and fixed on 2026-08-19, BEFORE any measurement was taken. It is a constant
+# rather than a judgment call precisely so the result cannot be rationalized
+# once the number is known. Do not adjust it to fit an outcome.
 CALIBRATION_THRESHOLD = 0.95
 
 # A verdict needs evidence. Below this many scored transactions the rule's
 # precision is a coin-flip artifact, so the criterion withholds judgment
 # rather than asserting one. This gate can only ever WITHHOLD a verdict,
-# never manufacture a favourable one - the 0.70 threshold above is
-# untouched and stays exactly as pre-registered.
+# never manufacture a favourable one.
 MIN_VERDICT_SAMPLE = 20
 
 
@@ -164,14 +162,27 @@ def score(
     )
 
 
-def time_cluster_verdict(result: EvaluationResult) -> tuple[float, bool] | None:
-    """Apply the pre-registered criterion. None when the rule never fired.
+def service_confidence_verdict(
+    result: EvaluationResult,
+) -> tuple[float, int, bool] | None:
+    """Apply the pre-registered service criterion. None when memo_match never fired.
 
-    Returns (measured B-cubed precision, whether it clears the threshold).
+    Returns (measured B-cubed precision, firing count, whether it earns a
+    confidence claim).
+
+    The criterion reuses CALIBRATION_THRESHOLD rather than inventing a number:
+    a rule that could not survive the floor it would then be subject to has no
+    business claiming confidence in the first place. Withholds below
+    MIN_VERDICT_SAMPLE - a precision computed over a handful of rows is a coin
+    flip, and withholding can only ever deny a claim, never manufacture one.
     """
     for metrics in result.per_rule:
-        if metrics.rule == RULE_TIME_CLUSTER:
-            return metrics.precision, metrics.precision >= TIME_CLUSTER_THRESHOLD
+        if metrics.rule == RULE_MEMO_MATCH:
+            earns = (
+                metrics.count >= MIN_VERDICT_SAMPLE
+                and metrics.precision >= CALIBRATION_THRESHOLD
+            )
+            return metrics.precision, metrics.count, earns
     return None
 
 
@@ -183,8 +194,11 @@ def failing_confident_rules(result: EvaluationResult) -> list[RuleMetrics]:
     the tier passes while a rule inside it is wrong a third of the time. The
     averaging is the hole, so the fix removes the averaging.
 
-    Descriptive rules are excluded. They claim no confidence, and a threshold
-    they were never asked to clear cannot meaningfully warn about them.
+    Only rules tiered CONFIDENT are considered. A rule whose rows are tiered
+    UNCERTAIN was never claiming confidence, so a threshold it was never
+    asked to clear must not warn about it. This applies per axis: since the
+    service axis earned its confidence claim in v0.1c, `memo_match` rows are
+    now tiered CONFIDENT and are subject to this floor like any other rule.
     """
     return [
         metrics
@@ -247,18 +261,24 @@ def run_evaluate(conn: sqlite3.Connection) -> AxisResults | None:
     )
 
 
-def _render_evaluation_body(result: EvaluationResult, claims_confidence: bool) -> list[str]:
+def _render_evaluation_body(
+    result: EvaluationResult, claims_confidence: bool, subject: str
+) -> list[str]:
     """Metrics, calibration (when claimed), per-rule breakdown, and verdict.
 
     Split out from `render_evaluation` so `render_axis_results` can render the
     service axis's body without also repeating the "Categorization accuracy
     (B-cubed)" banner underneath its own "What they paid for" section header.
+
+    `subject` names the axis in the recall description ("payer" or "service")
+    independently of `claims_confidence` - both axes claim confidence now, so
+    that flag no longer distinguishes them.
     """
     lines = [
         f"Precision:   {result.precision:.1%}"
         f"   (of the payments grouped together, how many belonged together)",
         f"Recall:      {result.recall:.1%}"
-        f"   (of the payments from one payer, how many were found)",
+        f"   (of the payments from one {subject}, how many were found)",
         f"             scored over {result.transaction_count} payments",
     ]
 
@@ -313,47 +333,47 @@ def _render_evaluation_body(result: EvaluationResult, claims_confidence: bool) -
                 f"  ({metrics.ordinary_count})"
             )
 
-    verdict = time_cluster_verdict(result)
-    if verdict is not None:
-        precision, passes = verdict
-        count = next(
-            (m.count for m in result.per_rule if m.rule == RULE_TIME_CLUSTER), 0
-        )
-        if count < MIN_VERDICT_SAMPLE:
-            lines += [
-                "",
-                f"Pre-registered criterion: time_cluster B-cubed precision "
-                f"{precision:.1%} on {count} payments - "
-                f"INSUFFICIENT DATA (need {MIN_VERDICT_SAMPLE}) - "
-                "no verdict recorded",
-            ]
-        else:
-            outcome = "PASSES" if passes else "FAILS"
-            lines += [
-                "",
-                f"Pre-registered criterion: time_cluster B-cubed precision "
-                f"{precision:.1%} on {count} payments - {outcome} threshold "
-                f"{TIME_CLUSTER_THRESHOLD:.2f}",
-            ]
+    if subject == "service":
+        service = service_confidence_verdict(result)
+        if service is not None:
+            precision, count, earns = service
+            if count < MIN_VERDICT_SAMPLE:
+                lines += [
+                    "",
+                    f"Pre-registered criterion: memo_match B-cubed precision "
+                    f"{precision:.1%} on {count} payments - "
+                    f"INSUFFICIENT DATA (need {MIN_VERDICT_SAMPLE}) - "
+                    "no confidence claim",
+                ]
+            else:
+                outcome = "EARNS" if earns else "DOES NOT EARN"
+                lines += [
+                    "",
+                    f"Pre-registered criterion: memo_match B-cubed precision "
+                    f"{precision:.1%} on {count} payments - {outcome} a "
+                    f"confidence claim (threshold "
+                    f"{CALIBRATION_THRESHOLD:.2f})",
+                ]
 
     return lines
 
 
-def render_evaluation(result: EvaluationResult, claims_confidence: bool = True) -> str:
+def render_evaluation(
+    result: EvaluationResult, claims_confidence: bool = True, subject: str = "payer"
+) -> str:
     """Render the banner, metrics, per-rule breakdown, and computed verdict.
 
     `claims_confidence` controls whether the calibration block is shown at
-    all. A rule tier that claims no confidence (the service axis's
-    `memo_match`/`none`) has no calibration floor to be measured against, so
-    printing a 0.0% figure beside a zero count there reads as failure when it
-    means the section was never asked to clear a bar in the first place.
+    all. `subject` names the axis ("payer" or "service") in the recall
+    description; it is independent of `claims_confidence` because both axes
+    now claim confidence.
     """
     lines = [
         "Categorization accuracy (B-cubed)",
         "=================================",
         "",
     ]
-    lines += _render_evaluation_body(result, claims_confidence)
+    lines += _render_evaluation_body(result, claims_confidence, subject)
     return "\n".join(lines)
 
 
@@ -374,13 +394,15 @@ def render_axis_results(results: AxisResults) -> str:
             "What they paid for",
             "==================",
             "",
-            "These groupings describe what was bought, not who bought it, and",
-            "claim no confidence. The figures below say how well grouping by the",
-            "payer's memo matches the services actually purchased.",
+            "These groupings describe what was bought, not who bought it. The",
+            "figures below say how well grouping by the payer's memo matches",
+            "the services actually purchased.",
             "",
         ]
         # No nested "Categorization accuracy (B-cubed)" banner here: the
         # section header above already names the axis, so repeating it would
         # be a duplicated, redundant heading.
-        text += _render_evaluation_body(results.service, claims_confidence=False)
+        text += _render_evaluation_body(
+            results.service, claims_confidence=True, subject="service"
+        )
     return "\n".join(text)
