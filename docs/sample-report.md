@@ -26,8 +26,8 @@ Payments received:  $393.629715  (292 payments)
 Refunds issued:     $2.712232  (8 refunds)
 Net received:       $390.917483
 
-  Confidently identified: $147.372312
-  Needs review:           $243.545171
+  Confidently identified (who paid you): $147.372312
+  Needs review (who paid you):           $243.545171
 
 Who paid you (net of refunds)
 -----------------------------
@@ -61,8 +61,9 @@ What they paid for (net of refunds)
   service:report-api-v2                                   $1.608748  (4 payments)
   No service identified                                 $252.722389  (195 payments)   [needs review]
 
-Anything marked [needs review] could not be confidently matched to a
-single payer or service. Please confirm these before relying on the totals.
+Each section marks its own [needs review] rows. A payment can appear
+in both - once because its payer is unconfirmed, once because its
+service is. The two sets overlap, so do not add them together.
 
 This report organizes payment data you have already received.
 It is not tax or accounting advice.

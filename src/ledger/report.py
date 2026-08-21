@@ -212,8 +212,8 @@ def render_summary(data: ReportData) -> str:
         f"  ({data.refund_count} {_refunds(data.refund_count)})",
         f"Net received:       {format_usdc(data.net_micro_usdc)}",
         "",
-        f"  Confidently identified: {format_usdc(data.confident_micro_usdc)}",
-        f"  Needs review:           {format_usdc(data.uncertain_micro_usdc)}",
+        f"  Confidently identified (who paid you): {format_usdc(data.confident_micro_usdc)}",
+        f"  Needs review (who paid you):           {format_usdc(data.uncertain_micro_usdc)}",
     ]
 
     lines += [
@@ -234,8 +234,9 @@ def render_summary(data: ReportData) -> str:
 
     lines += [
         "",
-        "Anything marked [needs review] could not be confidently matched to a",
-        "single payer or service. Please confirm these before relying on the totals.",
+        "Each section marks its own [needs review] rows. A payment can appear",
+        "in both - once because its payer is unconfirmed, once because its",
+        "service is. The two sets overlap, so do not add them together.",
         "",
         "This report organizes payment data you have already received.",
         "It is not tax or accounting advice.",
