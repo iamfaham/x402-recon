@@ -2,6 +2,7 @@ import pytest
 
 from ledger.evaluate import (
     CALIBRATION_THRESHOLD,
+    MIN_VERDICT_SAMPLE,
     AxisResults,
     render_axis_results,
     render_evaluation,
@@ -415,3 +416,52 @@ def test_service_axis_recall_description_says_service():
     text = render_evaluation(result, subject="service")
     assert "from one service" in text
     assert "from one payer" not in text
+
+
+# --- Item 1: pre-registered criterion line, via render_axis_results --------
+#
+# Mirrors the shape of the deleted v0.1b tests
+# (test_render_prints_a_computed_time_cluster_verdict,
+# test_render_withholds_verdict_below_the_minimum_sample,
+# test_render_prints_verdict_at_exactly_the_minimum_sample), but asserts on
+# render_axis_results so the subject="service" wiring is covered end-to-end,
+# not just service_confidence_verdict in isolation.
+
+
+def test_render_axis_results_prints_earns_at_or_above_the_floor():
+    payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
+    predicted = {f"s{i}": "svc" for i in range(25)}
+    truth = {f"s{i}": "X" for i in range(25)}
+    service = _memo_result(predicted, truth)
+
+    text = render_axis_results(AxisResults(payer=payer, service=service))
+
+    assert "EARNS" in text
+    assert "DOES NOT EARN" not in text
+    assert "0.95" in text
+
+
+def test_render_axis_results_prints_does_not_earn_below_the_floor():
+    payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
+    predicted = {f"s{i}": "svc" for i in range(24)}
+    truth = {f"s{i}": "X" for i in range(24)}
+    predicted["odd"] = "svc"
+    truth["odd"] = "Y"
+    service = _memo_result(predicted, truth)
+
+    text = render_axis_results(AxisResults(payer=payer, service=service))
+
+    assert "DOES NOT EARN" in text
+
+
+def test_render_axis_results_withholds_verdict_below_the_minimum_sample():
+    payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
+    predicted = {f"s{i}": "svc" for i in range(5)}
+    truth = {f"s{i}": "X" for i in range(5)}
+    service = _memo_result(predicted, truth)
+
+    text = render_axis_results(AxisResults(payer=payer, service=service))
+
+    assert "INSUFFICIENT DATA" in text
+    assert f"need {MIN_VERDICT_SAMPLE}" in text
+    assert "EARNS" not in text
