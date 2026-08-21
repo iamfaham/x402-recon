@@ -194,8 +194,11 @@ def failing_confident_rules(result: EvaluationResult) -> list[RuleMetrics]:
     the tier passes while a rule inside it is wrong a third of the time. The
     averaging is the hole, so the fix removes the averaging.
 
-    Descriptive rules are excluded. They claim no confidence, and a threshold
-    they were never asked to clear cannot meaningfully warn about them.
+    Only rules tiered CONFIDENT are considered. A rule whose rows are tiered
+    UNCERTAIN was never claiming confidence, so a threshold it was never
+    asked to clear must not warn about it. This applies per axis: since the
+    service axis earned its confidence claim in v0.1c, `memo_match` rows are
+    now tiered CONFIDENT and are subject to this floor like any other rule.
     """
     return [
         metrics
