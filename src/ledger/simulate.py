@@ -255,8 +255,11 @@ def generate_batch(
 
     # HAZARD: two recurring payers sending the same memo for different
     # services. memo_match merges them; service truth says they belong apart.
-    # Their senders repeat, so sender_match claims them on the payer axis and
-    # time_cluster is left untouched - the hazard is payer-axis-neutral.
+    # Their senders repeat by design, so sender_match claims them on the
+    # payer axis, keeping the hazard payer-axis-neutral. (time_cluster used
+    # to leave these alone for the same reason - repeating senders - before
+    # it was removed in v0.1c after failing its pre-registered criterion;
+    # see docs/measurements-v0.1c.md.)
     if hazards.shared_memo_different_services:
         per_agent = max(2, hazards.shared_memo_different_services // 2)
         for index, service in enumerate(_SHARED_MEMO_SERVICES):
@@ -271,8 +274,10 @@ def generate_batch(
             )
 
     # HAZARD: one-off payers scattered across the window. Because everything
-    # shares one timeline, these land inside real agent bursts — giving
-    # time_cluster both plausible-but-wrong and plausible-and-right cases.
+    # shares one timeline, these land inside real agent bursts. Before
+    # time_cluster was removed in v0.1c after failing its pre-registered
+    # criterion (see docs/measurements-v0.1c.md), this interleaving gave it
+    # both plausible-but-wrong and plausible-and-right cases.
     for _ in range(hazards.interleaved_one_offs):
         b.emit(
             _address(rng),

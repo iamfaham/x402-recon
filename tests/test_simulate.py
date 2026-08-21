@@ -399,8 +399,10 @@ def test_its_true_services_are_used_by_nothing_else():
 
 
 def test_it_is_payer_axis_neutral():
-    # Its senders repeat, so sender_match claims them and time_cluster - the
-    # rule this release decides - is untouched by the hazard's presence.
+    # Its senders repeat, so sender_match claims them on the payer axis
+    # regardless of this hazard's presence. (time_cluster, which used to fire
+    # on repeating senders too, was removed in v0.1c after failing its
+    # pre-registered criterion; see docs/measurements-v0.1c.md.)
     from collections import Counter
 
     batch = generate_batch(count=120, seed=1)
