@@ -12,9 +12,11 @@ from pathlib import Path
 from ledger.categorize import run_categorize
 from ledger.db import SchemaVersionError, connect, init_schema
 from ledger.evaluate import render_axis_results, run_evaluate
+from ledger.fetch import fetch_transactions, format_fetch_summary, write_fetched
 from ledger.ingest import IngestError, format_ingest_summary, ingest_from_dir
 from ledger.models import AXIS_COUNT
 from ledger.report import build_report, render_summary, write_csv
+from ledger.rpc import DEFAULT_BASE_RPC_URL, RpcClient, RpcError
 from ledger.simulate import generate_batch, write_batch
 
 _DATE_FORMAT = "%Y-%m-%d"
@@ -77,6 +79,17 @@ def _build_parser() -> argparse.ArgumentParser:
     report.add_argument("--csv", help="also write line-item detail to this CSV path")
 
     sub.add_parser("evaluate", help="score categorization against ground truth")
+
+    fetch = sub.add_parser("fetch", help="fetch real payments from the chain")
+    fetch.add_argument("--receiver", required=True, help="the address that was paid")
+    fetch.add_argument("--out", required=True, help="directory to write JSON into")
+    fetch.add_argument("--from-block", type=int, required=True)
+    fetch.add_argument("--to-block", type=int, required=True)
+    fetch.add_argument(
+        "--rpc-url",
+        default=DEFAULT_BASE_RPC_URL,
+        help="JSON-RPC endpoint (override to use your own node)",
+    )
     return parser
 
 
@@ -89,6 +102,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Generated {len(batch.transactions)} transactions.")
         for path in (tx_path, gt_path, hz_path, st_path):
             print(f"  {path}")
+        return 0
+
+    if args.command == "fetch":
+        try:
+            result = fetch_transactions(
+                RpcClient(args.rpc_url),
+                receiver=args.receiver,
+                from_block=args.from_block,
+                to_block=args.to_block,
+            )
+        except RpcError as exc:
+            print(f"Error: {exc}")
+            return 2
+        path = write_fetched(result, Path(args.out))
+        print(format_fetch_summary(result))
+        print(f"  {path}")
         return 0
 
     try:
