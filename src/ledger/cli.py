@@ -14,6 +14,7 @@ from ledger.db import SchemaVersionError, connect, init_schema
 from ledger.evaluate import render_axis_results, run_evaluate
 from ledger.fetch import fetch_transactions, format_fetch_summary, write_fetched
 from ledger.ingest import IngestError, format_ingest_summary, ingest_from_dir
+from ledger.labeling import build_worksheet, write_worksheet
 from ledger.models import AXIS_COUNT
 from ledger.report import build_report, render_summary, write_csv
 from ledger.rpc import DEFAULT_BASE_RPC_URL, RpcClient, RpcError
@@ -71,6 +72,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("categorize", help="run the categorization cascade")
 
     sub.add_parser("shape", help="describe a batch's structure, with no scores")
+
+    label = sub.add_parser("label", help="emit a worksheet for hand-labeling payers")
+    label.add_argument("--out", required=True, help="path to write the worksheet JSON")
 
     report = sub.add_parser("report", help="summarize a date range")
     report.add_argument(
@@ -149,6 +153,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "shape":
         print(render_shape(build_shape(conn)))
+        return 0
+
+    if args.command == "label":
+        path = write_worksheet(build_worksheet(conn), Path(args.out))
+        print(f"Wrote worksheet to {path}")
+        print("Fill in true_group and evidence by hand, then convert to")
+        print("ground_truth.json before ingesting.")
         return 0
 
     if args.command == "report":
