@@ -81,6 +81,33 @@ def test_outbound_transfer_to_a_prior_payer_becomes_a_positive_refund():
     # Refunds are stored as POSITIVE amounts; the tx_type carries the sign.
     assert refunds[0].amount_micro_usdc == 500_000
     assert refunds[0].amount_micro_usdc > 0
+    # sender_address is ALWAYS the counterparty and receiver_address is
+    # ALWAYS the merchant, for payments and refunds alike - only tx_type
+    # carries direction. The raw on-chain Transfer runs merchant -> payer, so
+    # this must NOT match the raw log direction.
+    assert refunds[0].sender_address.lower() == PAYER.lower()
+    assert refunds[0].receiver_address.lower() == RECEIVER.lower()
+
+
+def test_refund_addresses_are_not_the_raw_on_chain_transfer_direction():
+    # Pins the schema convention directly: a fetched refund's sender/receiver
+    # must be the original payer / merchant, not swapped to match the raw
+    # ERC-20 Transfer's from/to (which runs merchant -> payer for a refund).
+    result = fetch_transactions(
+        _client(
+            [_log("0xa", PAYER, RECEIVER, "0x0f4240")],
+            [_log("0xb", RECEIVER, PAYER, "0x7a120")],
+        ),
+        receiver=RECEIVER,
+        from_block=0,
+        to_block=10,
+    )
+    refunds = [t for t in result.transactions if t.tx_type == TX_TYPE_REFUND]
+    assert len(refunds) == 1
+    refund = refunds[0]
+    assert refund.sender_address.lower() == PAYER.lower()
+    assert refund.receiver_address.lower() == RECEIVER.lower()
+    assert refund.amount_micro_usdc > 0
 
 
 def test_outbound_transfer_to_a_stranger_is_rejected_not_silently_dropped():

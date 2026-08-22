@@ -4,6 +4,7 @@ Writes the same JSON shape `simulate` writes, so `ingest` needs no knowledge
 that the data came from a chain rather than a generator.
 """
 
+import dataclasses
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,6 +88,22 @@ def fetch_transactions(
         timestamp = client.block_timestamp(log.get("blockNumber", "0x0"))
         transaction = _decode(log, timestamp, TX_TYPE_REFUND, rejects)
         if transaction is not None:
+            # `log_to_transaction` decodes the raw ERC-20 Transfer direction:
+            # sender = the merchant (topics[1], the "from"), receiver = the
+            # payer being refunded (topics[2], the "to"). But the project's
+            # schema convention - confirmed in simulate.py (refunds carry
+            # sender_address = the original payer) and categorize.py (the
+            # payer axis groups by sender_address for every tx_type) - is
+            # that sender_address is ALWAYS the counterparty and
+            # receiver_address is ALWAYS the merchant, regardless of
+            # direction; only tx_type carries the sign. Swap the two fields
+            # so a fetched refund matches that convention instead of the raw
+            # on-chain direction.
+            transaction = dataclasses.replace(
+                transaction,
+                sender_address=transaction.receiver_address,
+                receiver_address=transaction.sender_address,
+            )
             refunds.append(transaction)
 
     combined = sorted(payments + refunds, key=lambda t: (t.timestamp, t.tx_hash))
