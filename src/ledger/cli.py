@@ -17,6 +17,7 @@ from ledger.ingest import IngestError, format_ingest_summary, ingest_from_dir
 from ledger.models import AXIS_COUNT
 from ledger.report import build_report, render_summary, write_csv
 from ledger.rpc import DEFAULT_BASE_RPC_URL, RpcClient, RpcError
+from ledger.shape import build_shape, render_shape
 from ledger.simulate import generate_batch, write_batch
 
 _DATE_FORMAT = "%Y-%m-%d"
@@ -68,6 +69,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--from", dest="source", required=True, help="source directory")
 
     sub.add_parser("categorize", help="run the categorization cascade")
+
+    sub.add_parser("shape", help="describe a batch's structure, with no scores")
 
     report = sub.add_parser("report", help="summarize a date range")
     report.add_argument(
@@ -142,6 +145,10 @@ def main(argv: list[str] | None = None) -> int:
             f"Categorized {transaction_count} transactions "
             f"({row_count} rows across {AXIS_COUNT} axes)."
         )
+        return 0
+
+    if args.command == "shape":
+        print(render_shape(build_shape(conn)))
         return 0
 
     if args.command == "report":

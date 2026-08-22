@@ -65,9 +65,11 @@ CREATE INDEX IF NOT EXISTS idx_transactions_timestamp
 """
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
+def connect(db_path: Path | str) -> sqlite3.Connection:
     """Open a connection with row access by column name and FKs enforced."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if db_path != ":memory:":
+        db_path_obj = Path(db_path)
+        db_path_obj.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
