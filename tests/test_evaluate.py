@@ -432,19 +432,29 @@ def test_service_axis_recall_description_says_service():
 
 
 def test_render_axis_results_prints_earns_at_or_above_the_floor():
+    # Scoped to the service section: the payer axis now also renders its own
+    # pre-registered criterion (Task 6), and a 2-payment payer fixture falls
+    # below MIN_VERDICT_SAMPLE, so unscoped assertions on the full text would
+    # be satisfied by payer's INSUFFICIENT DATA / non-EARNS wording too. This
+    # test is about the service verdict specifically, so it must only look at
+    # the service section - see
+    # test_render_axis_results_shows_both_axis_headers_and_both_calibrations
+    # above for the same split-on-header pattern.
     payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
     predicted = {f"s{i}": "svc" for i in range(25)}
     truth = {f"s{i}": "X" for i in range(25)}
     service = _memo_result(predicted, truth)
 
     text = render_axis_results(AxisResults(payer=payer, service=service))
+    service_block = text.split("What they paid for", 1)[1]
 
-    assert "EARNS" in text
-    assert "DOES NOT EARN" not in text
-    assert "0.95" in text
+    assert "EARNS" in service_block
+    assert "DOES NOT EARN" not in service_block
+    assert "0.95" in service_block
 
 
 def test_render_axis_results_prints_does_not_earn_below_the_floor():
+    # Scoped to the service section - see comment above.
     payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
     predicted = {f"s{i}": "svc" for i in range(24)}
     truth = {f"s{i}": "X" for i in range(24)}
@@ -453,21 +463,27 @@ def test_render_axis_results_prints_does_not_earn_below_the_floor():
     service = _memo_result(predicted, truth)
 
     text = render_axis_results(AxisResults(payer=payer, service=service))
+    service_block = text.split("What they paid for", 1)[1]
 
-    assert "DOES NOT EARN" in text
+    assert "DOES NOT EARN" in service_block
 
 
 def test_render_axis_results_withholds_verdict_below_the_minimum_sample():
+    # Scoped to the service section - see comment above. Without the split,
+    # the payer axis's own 2-payment fixture (below MIN_VERDICT_SAMPLE)
+    # satisfies all three assertions on its own, so this test would pass
+    # even if the service withholding branch were deleted entirely.
     payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
     predicted = {f"s{i}": "svc" for i in range(5)}
     truth = {f"s{i}": "X" for i in range(5)}
     service = _memo_result(predicted, truth)
 
     text = render_axis_results(AxisResults(payer=payer, service=service))
+    service_block = text.split("What they paid for", 1)[1]
 
-    assert "INSUFFICIENT DATA" in text
-    assert f"need {MIN_VERDICT_SAMPLE}" in text
-    assert "EARNS" not in text
+    assert "INSUFFICIENT DATA" in service_block
+    assert f"need {MIN_VERDICT_SAMPLE}" in service_block
+    assert "EARNS" not in service_block
 
 
 # --- Task 6: payer_confidence_verdict / pre-registered payer criterion -----
