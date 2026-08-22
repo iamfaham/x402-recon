@@ -61,6 +61,12 @@ def write_worksheet(rows: list[dict], path: Path) -> Path:
     Deliberately not named ground_truth.json: `ingest` reads that name, and a
     half-filled worksheet must never be ingestable as truth.
     """
+    if path.name == "ground_truth.json":
+        raise ValueError(
+            "refusing to write the worksheet as ground_truth.json - ingest reads "
+            "that filename, and a half-filled worksheet must never be loaded as "
+            "truth. Choose another name."
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps({"instructions": LABELING_INSTRUCTIONS, "senders": rows}, indent=2)

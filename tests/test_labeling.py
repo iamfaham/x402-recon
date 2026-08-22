@@ -72,9 +72,18 @@ def test_written_worksheet_leads_with_the_instructions(tmp_path, conn):
     assert len(document["senders"]) == 2
 
 
-def test_written_worksheet_is_not_a_ground_truth_file(tmp_path, conn):
-    # ingest reads ground_truth.json. The worksheet must not be mistakable for
-    # one, or a half-filled worksheet could be ingested as truth.
+def test_write_worksheet_refuses_the_ground_truth_filename(tmp_path, conn):
+    # ingest reads ground_truth.json. A half-filled worksheet written there
+    # would crash ingest mid-transaction and take the transaction rows with it.
+    with pytest.raises(ValueError, match="ground_truth.json"):
+        write_worksheet(build_worksheet(conn), tmp_path / "ground_truth.json")
+
+
+def test_written_worksheet_is_not_named_ground_truth(tmp_path, conn):
+    # Ensure the happy path still works: normal filenames produce the
+    # instructions + senders structure.
     path = write_worksheet(build_worksheet(conn), tmp_path / "worksheet.json")
+    document = json.loads(path.read_text())
     assert path.name != "ground_truth.json"
-    assert "instructions" in json.loads(path.read_text())
+    assert "instructions" in document
+    assert "senders" in document
