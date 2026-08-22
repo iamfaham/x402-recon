@@ -10,8 +10,8 @@ RECEIVER = "0x" + "99" * 20
 
 
 @pytest.fixture
-def conn():
-    connection = connect(":memory:")
+def conn(tmp_path):
+    connection = connect(tmp_path / "t.db")
     init_schema(connection)
     return connection
 
