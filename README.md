@@ -9,11 +9,33 @@ confidently identified and what still needs review.
 Ledger only reads and summarizes payments a business has already received. It
 never holds or moves funds, and it does not provide tax or accounting advice.
 
-## Status: v0.1c
+## Status: v0.2
 
-v0.1c runs on simulated data. Real transaction data (Base Sepolia testnet, or a
-public x402 dataset) is the next milestone — it plugs into the ingest stage
-without changing anything downstream.
+v0.2 can read real payments off Base mainnet. `ledger fetch` pulls native-USDC
+transfers for one receiver address and writes the same JSON that `simulate`
+writes, so `ingest` and everything downstream are unchanged. That was the
+design bet made in v0.1c, and it held: `ingest.py` was not modified.
+
+**The accuracy figures below are still measured on simulated data.** The staged
+measurement against real transactions — fetch, inspect the batch's shape,
+hand-label a sample, then apply the pre-registered criterion — is built and
+tested but **has not been run**. Until it is, the payer axis's confidence claim
+is calibrated on simulation only, and the report says so on any dataset that
+carries no ground truth.
+
+Two things are true of real chain data that are not true of the simulator:
+
+- **The service axis goes dark.** x402 settles via EIP-3009
+  `transferWithAuthorization`, whose payload identifies no resource. What was
+  bought lives in the seller's HTTP request log, never on the chain — so every
+  fetched transaction has `memo = None`, and the report suppresses the service
+  breakdown with an explanation rather than printing a wall of "no service
+  identified". Recovering that axis needs seller-side capture, not a better
+  chain query.
+- **There is no ground truth.** Real payments arrive unlabeled. The report
+  distinguishes three states — uncalibrated, partially labeled, fully labeled
+  — derived from how much of the reported range appears in `ground_truth`,
+  never from a flag anyone can set wrongly.
 
 ## Usage
 
@@ -25,6 +47,33 @@ uv run ledger --db sample/ledger.db ingest --from sample/data
 uv run ledger --db sample/ledger.db categorize
 uv run ledger --db sample/ledger.db report --from 2026-08-01 --to 2026-09-30 --csv sample/report.csv
 uv run ledger --db sample/ledger.db evaluate
+```
+
+On real data, `fetch` replaces `simulate` and two extra stages appear:
+
+```bash
+uv run ledger fetch --receiver 0xYOUR_ADDRESS --out sample/real     --from-block 34000000 --to-block 34100000
+uv run ledger --db sample/real.db ingest --from sample/real
+uv run ledger --db sample/real.db categorize
+
+# Stage 1 - structure only. Reports no accuracy figure of any kind, so that
+# seeing the answer cannot influence how the sample is later labeled.
+uv run ledger --db sample/real.db shape
+
+# Stage 2 - a worksheet for a human. The tool never assigns truth: the only
+# signal it has is the sender address, which is the signal under test.
+uv run ledger --db sample/real.db label --out sample/real/worksheet.json
+```
+
+Fill in `true_group` and `evidence` by hand using evidence **independent of the
+sender address** — a Basename, an explorer entity label, a shared funding
+source. Then convert the filled worksheet to `ground_truth.json` (each row
+already carries its `tx_hash`), re-ingest, and read the verdict:
+
+```bash
+uv run ledger --db sample/real.db ingest --from sample/real
+uv run ledger --db sample/real.db evaluate
+uv run ledger --db sample/real.db report --from 2026-07-01 --to 2026-07-31
 ```
 
 ## How categorization works
@@ -54,7 +103,7 @@ held up, so `memo_match` claims confidence too. Nothing is ever forced into a
 bucket. See [What the two axes mean](#what-the-two-axes-mean) below for why
 the axes are kept apart.
 
-## Measured accuracy (seed 42, 300 transactions)
+## Measured accuracy on simulated data (seed 42, 300 transactions)
 
 The canonical count for v0.1c is 300. v0.1a and v0.1b both used `--count
 120`, so the figures below are **not directly comparable** to earlier
