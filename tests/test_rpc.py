@@ -85,6 +85,14 @@ def test_block_timestamp_is_cached_so_a_busy_block_is_fetched_once():
     assert len(transport.requests) == 1
 
 
+def test_call_raises_when_the_response_has_neither_result_nor_error():
+    # A malformed response must not be treated as "no data" - that would
+    # let real logs vanish silently under this exact condition.
+    transport = FakeTransport([{"jsonrpc": "2.0", "id": 1}])
+    with pytest.raises(RpcError, match="neither"):
+        RpcClient(transport=transport).call("eth_getLogs", [{}])
+
+
 def test_block_timestamp_raises_when_the_block_is_missing():
     transport = FakeTransport([{"result": None}])
     with pytest.raises(RpcError, match="no block"):

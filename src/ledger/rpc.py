@@ -56,7 +56,12 @@ class RpcClient:
         response = self._transport(payload)
         if "error" in response:
             raise RpcError(f"{method} failed: {response['error'].get('message')}")
-        return response.get("result")
+        if "result" not in response:
+            raise RpcError(
+                f"{method} returned a response with neither 'result' nor "
+                f"'error': {response!r}"
+            )
+        return response["result"]
 
     def get_logs(
         self, *, address: str, topics: list, from_block: int, to_block: int
