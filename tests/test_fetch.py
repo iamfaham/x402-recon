@@ -1,6 +1,6 @@
 import json
 
-from ledger.chain import TRANSFER_TOPIC0, USDC_BASE_MAINNET
+from ledger.chain import TRANSFER_TOPIC0, USDBC_BASE_MAINNET_EXCLUDED, USDC_BASE_MAINNET
 from ledger.fetch import (
     fetch_transactions,
     format_fetch_summary,
@@ -34,12 +34,15 @@ class FakeTransport:
         self.outbound = outbound
         self.timestamp = timestamp
         self.calls = 0
+        self.queried_addresses = []
 
     def __call__(self, payload):
         if payload["method"] == "eth_getBlockByNumber":
             return {"result": {"timestamp": self.timestamp}}
         self.calls += 1
-        topics = payload["params"][0]["topics"]
+        params = payload["params"][0]
+        self.queried_addresses.append(params["address"])
+        topics = params["topics"]
         # topics == [transfer, from, to]; a `to` filter means inbound.
         return {"result": self.inbound if topics[2] else self.outbound}
 
@@ -158,9 +161,18 @@ def test_only_the_native_usdc_contract_is_queried():
     fetch_transactions(
         RpcClient(transport=transport), receiver=RECEIVER, from_block=0, to_block=10
     )
-    # Reconstructed from the recorded calls in the fake; both directions must
-    # target native USDC and nothing else.
     assert transport.calls == 2
+    assert transport.queried_addresses == [USDC_BASE_MAINNET, USDC_BASE_MAINNET]
+
+
+def test_usdbc_is_never_queried():
+    # USDbC is a different, bridged token. Including it would inflate totals.
+    # This test would fail if fetch_transactions ever queried it.
+    transport = FakeTransport([], [])
+    fetch_transactions(
+        RpcClient(transport=transport), receiver=RECEIVER, from_block=0, to_block=10
+    )
+    assert USDBC_BASE_MAINNET_EXCLUDED not in transport.queried_addresses
 
 
 def test_write_fetched_writes_the_shape_ingest_already_reads(tmp_path):
