@@ -95,6 +95,9 @@ class ReportData:
     net_micro_usdc: int
     confident_micro_usdc: int
     uncertain_micro_usdc: int
+    labeled_count: int
+    reported_count: int
+    memo_count: int
 
 
 def _breakdown(rows, label_key: str, tier_key: str, rule_key: str) -> list[CategoryLine]:
@@ -138,6 +141,10 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
     """Aggregate categorized transactions for an inclusive date range."""
     rows = conn.execute(_SELECT_IN_RANGE, _bounds(start, end)).fetchall()
 
+    reported_hashes = {row["tx_hash"] for row in rows}
+    labeled = conn.execute("SELECT tx_hash FROM ground_truth").fetchall()
+    labeled_count = sum(1 for row in labeled if row["tx_hash"] in reported_hashes)
+
     payer_lines = _breakdown(rows, "payer_label", "payer_tier", "payer_rule")
     service_lines = _breakdown(rows, "service_label", "service_tier", "service_rule")
 
@@ -147,6 +154,7 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
     net = gross - refunded
     payment_count = sum(1 for r in rows if r["tx_type"] == TX_TYPE_PAYMENT)
     refund_count = sum(1 for r in rows if r["tx_type"] == TX_TYPE_REFUND)
+    memo_count = sum(1 for row in rows if row["memo"] is not None)
 
     return ReportData(
         start=start,
@@ -161,7 +169,24 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
         net_micro_usdc=net,
         confident_micro_usdc=confident,
         uncertain_micro_usdc=net - confident,
+        labeled_count=labeled_count,
+        reported_count=len(rows),
+        memo_count=memo_count,
     )
+
+
+def calibration_state(data: ReportData) -> str:
+    """Whether accuracy has been measured on the data being reported.
+
+    Derived from ground-truth coverage rather than declared by a flag, so it
+    cannot be set wrongly. "Confidently identified" is a claim about accuracy,
+    and it is only honest where accuracy was actually measured.
+    """
+    if data.reported_count == 0 or data.labeled_count == 0:
+        return "uncalibrated"
+    if data.labeled_count >= data.reported_count:
+        return "calibrated"
+    return "partial"
 
 
 def _format_line(line: CategoryLine, axis: str) -> str:
@@ -216,6 +241,23 @@ def render_summary(data: ReportData) -> str:
         f"  Needs review (who paid you):           {format_usdc(data.uncertain_micro_usdc)}",
     ]
 
+    state = calibration_state(data)
+    if state == "uncalibrated":
+        lines += [
+            "",
+            '  ! No ground truth was supplied for this data, so "confidently" is',
+            "    uncalibrated here. The grouping is shown; its accuracy on this",
+            "    dataset is unmeasured.",
+        ]
+    elif state == "partial":
+        share = data.labeled_count / data.reported_count
+        lines += [
+            "",
+            f"  ! Accuracy measured on {data.labeled_count} of "
+            f"{data.reported_count} transactions ({share:.1%} labeled).",
+            "    The rest are grouped by the same rule, unmeasured.",
+        ]
+
     lines += [
         "",
         "Who paid you (net of refunds)",
@@ -223,14 +265,25 @@ def render_summary(data: ReportData) -> str:
     ]
     lines += [_format_line(line, AXIS_PAYER) for line in data.payer_lines]
 
-    lines += [
-        "",
-        "What they paid for (net of refunds)",
-        "-----------------------------------",
-        "  Grouped by the memo the payer sent. These groupings describe what was",
-        "  bought; they are not a claim about who bought it.",
-    ]
-    lines += [_format_line(line, AXIS_SERVICE) for line in data.service_lines]
+    if data.memo_count == 0:
+        lines += [
+            "",
+            "What they paid for",
+            "------------------",
+            "  This data carries no memo, so nothing here describes what was",
+            "  bought. On-chain transfers do not record which resource was",
+            "  purchased - that lives in the seller's request log, not on the",
+            "  chain.",
+        ]
+    else:
+        lines += [
+            "",
+            "What they paid for (net of refunds)",
+            "-----------------------------------",
+            "  Grouped by the memo the payer sent. These groupings describe what was",
+            "  bought; they are not a claim about who bought it.",
+        ]
+        lines += [_format_line(line, AXIS_SERVICE) for line in data.service_lines]
 
     lines += [
         "",

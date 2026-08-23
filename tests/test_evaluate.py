@@ -4,6 +4,8 @@ from ledger.evaluate import (
     CALIBRATION_THRESHOLD,
     MIN_VERDICT_SAMPLE,
     AxisResults,
+    EvaluationResult,
+    RuleMetrics,
     render_axis_results,
     render_evaluation,
     score,
@@ -12,12 +14,13 @@ from ledger.evaluate import (
 from ledger.models import (
     CONFIDENT,
     RULE_MEMO_MATCH,
+    RULE_NONE,
     RULE_SENDER_MATCH,
     UNCATEGORIZED,
     UNCERTAIN,
     UNGROUPABLE,
 )
-from ledger.evaluate import failing_confident_rules
+from ledger.evaluate import failing_confident_rules, payer_confidence_verdict
 
 
 def build(predicted, truth, tiers=None, rules=None, hazards=None):
@@ -429,19 +432,29 @@ def test_service_axis_recall_description_says_service():
 
 
 def test_render_axis_results_prints_earns_at_or_above_the_floor():
+    # Scoped to the service section: the payer axis now also renders its own
+    # pre-registered criterion (Task 6), and a 2-payment payer fixture falls
+    # below MIN_VERDICT_SAMPLE, so unscoped assertions on the full text would
+    # be satisfied by payer's INSUFFICIENT DATA / non-EARNS wording too. This
+    # test is about the service verdict specifically, so it must only look at
+    # the service section - see
+    # test_render_axis_results_shows_both_axis_headers_and_both_calibrations
+    # above for the same split-on-header pattern.
     payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
     predicted = {f"s{i}": "svc" for i in range(25)}
     truth = {f"s{i}": "X" for i in range(25)}
     service = _memo_result(predicted, truth)
 
     text = render_axis_results(AxisResults(payer=payer, service=service))
+    service_block = text.split("What they paid for", 1)[1]
 
-    assert "EARNS" in text
-    assert "DOES NOT EARN" not in text
-    assert "0.95" in text
+    assert "EARNS" in service_block
+    assert "DOES NOT EARN" not in service_block
+    assert "0.95" in service_block
 
 
 def test_render_axis_results_prints_does_not_earn_below_the_floor():
+    # Scoped to the service section - see comment above.
     payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
     predicted = {f"s{i}": "svc" for i in range(24)}
     truth = {f"s{i}": "X" for i in range(24)}
@@ -450,18 +463,115 @@ def test_render_axis_results_prints_does_not_earn_below_the_floor():
     service = _memo_result(predicted, truth)
 
     text = render_axis_results(AxisResults(payer=payer, service=service))
+    service_block = text.split("What they paid for", 1)[1]
 
-    assert "DOES NOT EARN" in text
+    assert "DOES NOT EARN" in service_block
 
 
 def test_render_axis_results_withholds_verdict_below_the_minimum_sample():
+    # Scoped to the service section - see comment above. Without the split,
+    # the payer axis's own 2-payment fixture (below MIN_VERDICT_SAMPLE)
+    # satisfies all three assertions on its own, so this test would pass
+    # even if the service withholding branch were deleted entirely.
     payer = build({"a": "g1", "b": "g1"}, {"a": "X", "b": "X"})
     predicted = {f"s{i}": "svc" for i in range(5)}
     truth = {f"s{i}": "X" for i in range(5)}
     service = _memo_result(predicted, truth)
 
     text = render_axis_results(AxisResults(payer=payer, service=service))
+    service_block = text.split("What they paid for", 1)[1]
 
-    assert "INSUFFICIENT DATA" in text
-    assert f"need {MIN_VERDICT_SAMPLE}" in text
-    assert "EARNS" not in text
+    assert "INSUFFICIENT DATA" in service_block
+    assert f"need {MIN_VERDICT_SAMPLE}" in service_block
+    assert "EARNS" not in service_block
+
+
+# --- Task 6: payer_confidence_verdict / pre-registered payer criterion -----
+#
+# Pre-registered BEFORE any real labeled data exists for the payer axis - see
+# the v0.2 spec. Mirrors service_confidence_verdict exactly, with
+# sender_match in place of memo_match. These helpers build synthetic
+# EvaluationResult objects directly (rather than routing arbitrary target
+# precisions through score(), which can only land on fractions score()'s
+# group arithmetic happens to produce) since only the resulting .precision,
+# .count, and threshold-crossing behaviour are under test here, not B-cubed
+# arithmetic itself - that is already covered above.
+
+
+def _result_with_rule(rule: str, precision: float, count: int) -> EvaluationResult:
+    metrics = RuleMetrics(
+        rule=rule,
+        tier=CONFIDENT,
+        count=count,
+        precision=precision,
+        recall=1.0,
+        hazard_count=0,
+        hazard_precision=0.0,
+        ordinary_count=count,
+        ordinary_precision=precision,
+    )
+    return EvaluationResult(
+        precision=precision,
+        recall=1.0,
+        confident_precision=precision,
+        confident_count=count,
+        declined_recall=0.0,
+        declined_count=0,
+        transaction_count=count,
+        hazards_available=False,
+        per_rule=[metrics],
+    )
+
+
+def _axis_results_with_payer(precision: float, count: int) -> AxisResults:
+    return AxisResults(
+        payer=_result_with_rule(RULE_SENDER_MATCH, precision, count),
+        service=None,
+    )
+
+
+def test_payer_verdict_earns_at_or_above_the_floor():
+    result = _result_with_rule(RULE_SENDER_MATCH, precision=0.96, count=25)
+    precision, count, earns = payer_confidence_verdict(result)
+    assert count == 25
+    assert earns is True
+
+
+def test_payer_verdict_does_not_earn_below_the_floor():
+    result = _result_with_rule(RULE_SENDER_MATCH, precision=0.94, count=25)
+    _, _, earns = payer_confidence_verdict(result)
+    assert earns is False
+
+
+def test_payer_verdict_is_none_when_sender_match_never_fired():
+    result = _result_with_rule(RULE_NONE, precision=1.0, count=10)
+    assert payer_confidence_verdict(result) is None
+
+
+def test_payer_criterion_reuses_the_existing_floor_and_sample_bar():
+    # No new number is invented this release. If either of these changes, the
+    # criterion silently stops being the one the spec pre-registered.
+    assert CALIBRATION_THRESHOLD == 0.95
+    assert MIN_VERDICT_SAMPLE == 20
+
+
+def test_render_axis_results_prints_the_payer_criterion_above_the_bar():
+    rendered = render_axis_results(_axis_results_with_payer(precision=0.96, count=25))
+    assert "Pre-registered criterion: sender_match" in rendered
+    assert "EARNS" in rendered
+    assert "0.95" in rendered
+
+
+def test_render_axis_results_prints_payer_does_not_earn_below_the_floor():
+    # Named with the payer- prefix to avoid shadowing
+    # test_render_axis_results_prints_does_not_earn_below_the_floor above,
+    # which covers the same wording for the service axis - two module-level
+    # functions with the same name would silently drop one from collection.
+    rendered = render_axis_results(_axis_results_with_payer(precision=0.90, count=25))
+    assert "DOES NOT EARN" in rendered
+
+
+def test_render_axis_results_withholds_below_the_minimum_sample():
+    rendered = render_axis_results(_axis_results_with_payer(precision=0.99, count=12))
+    assert "INSUFFICIENT DATA" in rendered
+    assert "need 20" in rendered

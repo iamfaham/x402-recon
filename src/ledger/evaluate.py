@@ -27,6 +27,7 @@ from ledger.models import (
     AXIS_SERVICE,
     CONFIDENT,
     RULE_MEMO_MATCH,
+    RULE_SENDER_MATCH,
     UNCATEGORIZED,
     UNGROUPABLE,
 )
@@ -186,6 +187,34 @@ def service_confidence_verdict(
     return None
 
 
+def payer_confidence_verdict(
+    result: EvaluationResult,
+) -> tuple[float, int, bool] | None:
+    """Apply the pre-registered payer criterion. None when sender_match never fired.
+
+    Returns (measured B-cubed precision, firing count, whether it earns a
+    confidence claim).
+
+    The criterion reuses CALIBRATION_THRESHOLD rather than inventing a number:
+    a rule that could not survive the floor it would then be subject to has no
+    business claiming confidence in the first place. Withholds below
+    MIN_VERDICT_SAMPLE - a precision computed over a handful of rows is a coin
+    flip, and withholding can only ever deny a claim, never manufacture one.
+
+    Pre-registered in the v0.2 spec before any real transaction was fetched,
+    so this criterion's threshold cannot have been fitted to a result someone
+    had already seen.
+    """
+    for metrics in result.per_rule:
+        if metrics.rule == RULE_SENDER_MATCH:
+            earns = (
+                metrics.count >= MIN_VERDICT_SAMPLE
+                and metrics.precision >= CALIBRATION_THRESHOLD
+            )
+            return metrics.precision, metrics.count, earns
+    return None
+
+
 def failing_confident_rules(result: EvaluationResult) -> list[RuleMetrics]:
     """Confident rules whose own precision falls below the threshold.
 
@@ -334,26 +363,34 @@ def _render_evaluation_body(
             )
 
     if subject == "service":
-        service = service_confidence_verdict(result)
-        if service is not None:
-            precision, count, earns = service
-            if count < MIN_VERDICT_SAMPLE:
-                lines += [
-                    "",
-                    f"Pre-registered criterion: memo_match B-cubed precision "
-                    f"{precision:.1%} on {count} payments - "
-                    f"INSUFFICIENT DATA (need {MIN_VERDICT_SAMPLE}) - "
-                    "no confidence claim",
-                ]
-            else:
-                outcome = "EARNS" if earns else "DOES NOT EARN"
-                lines += [
-                    "",
-                    f"Pre-registered criterion: memo_match B-cubed precision "
-                    f"{precision:.1%} on {count} payments - {outcome} a "
-                    f"confidence claim (threshold "
-                    f"{CALIBRATION_THRESHOLD:.2f})",
-                ]
+        verdict = service_confidence_verdict(result)
+        rule_name = "memo_match"
+    elif subject == "payer":
+        verdict = payer_confidence_verdict(result)
+        rule_name = "sender_match"
+    else:
+        verdict = None
+        rule_name = ""
+
+    if verdict is not None:
+        precision, count, earns = verdict
+        if count < MIN_VERDICT_SAMPLE:
+            lines += [
+                "",
+                f"Pre-registered criterion: {rule_name} B-cubed precision "
+                f"{precision:.1%} on {count} payments - "
+                f"INSUFFICIENT DATA (need {MIN_VERDICT_SAMPLE}) - "
+                "no confidence claim",
+            ]
+        else:
+            outcome = "EARNS" if earns else "DOES NOT EARN"
+            lines += [
+                "",
+                f"Pre-registered criterion: {rule_name} B-cubed precision "
+                f"{precision:.1%} on {count} payments - {outcome} a "
+                f"confidence claim (threshold "
+                f"{CALIBRATION_THRESHOLD:.2f})",
+            ]
 
     return lines
 

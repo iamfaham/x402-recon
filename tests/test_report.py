@@ -7,8 +7,8 @@ from ledger.categorize import run_categorize
 from ledger.db import connect, init_schema, load_transactions
 from ledger.ingest import ingest_from_dir
 from ledger.models import TX_TYPE_REFUND
-from ledger.money import usdc_to_micro
-from ledger.report import build_report, render_summary, write_csv
+from ledger.money import format_usdc, usdc_to_micro
+from ledger.report import build_report, calibration_state, render_summary, write_csv
 
 
 def seed(conn, rows):
@@ -497,3 +497,173 @@ def test_csv_carries_both_axes(tmp_path: Path):
     first = next(r for r in rows if r["tx_hash"] == "0x1")
     assert first["payer_label"] == "agent:0xa"
     assert first["service_label"] == "service:weather-api"
+
+
+def unlabeled_db(tmp_path: Path):
+    """Real-chain shape: no memo, and no ground_truth coverage at all."""
+    conn = connect(tmp_path / "u.db")
+    init_schema(conn)
+    seed_with_types(
+        conn,
+        [
+            ("0x1", "0xa", None, "2026-08-10T10:00:00Z", 3_000_000, "payment"),
+            ("0x2", "0xa", None, "2026-08-10T10:01:00Z", 1_000_000, "payment"),
+            ("0x3", "0xb", None, "2026-08-11T10:00:00Z", 2_000_000, "payment"),
+        ],
+    )
+    run_categorize(conn)
+    return conn
+
+
+def labeled_db(tmp_path: Path):
+    """Every reported tx_hash is present in ground_truth."""
+    conn = connect(tmp_path / "l.db")
+    init_schema(conn)
+    seed_with_types(
+        conn,
+        [
+            ("0x1", "0xa", None, "2026-08-10T10:00:00Z", 3_000_000, "payment"),
+            ("0x2", "0xa", None, "2026-08-10T10:01:00Z", 1_000_000, "payment"),
+            ("0x3", "0xb", None, "2026-08-11T10:00:00Z", 2_000_000, "payment"),
+        ],
+    )
+    run_categorize(conn)
+    conn.executemany(
+        "INSERT INTO ground_truth (tx_hash, true_group) VALUES (?, ?)",
+        [("0x1", "agent-a"), ("0x2", "agent-a"), ("0x3", "agent-b")],
+    )
+    conn.commit()
+    return conn
+
+
+def partly_labeled_db(tmp_path: Path):
+    """Some, but not all, reported tx_hashes are present in ground_truth."""
+    conn = connect(tmp_path / "p.db")
+    init_schema(conn)
+    seed_with_types(
+        conn,
+        [
+            ("0x1", "0xa", None, "2026-08-10T10:00:00Z", 3_000_000, "payment"),
+            ("0x2", "0xa", None, "2026-08-10T10:01:00Z", 1_000_000, "payment"),
+            ("0x3", "0xb", None, "2026-08-11T10:00:00Z", 2_000_000, "payment"),
+        ],
+    )
+    run_categorize(conn)
+    conn.executemany(
+        "INSERT INTO ground_truth (tx_hash, true_group) VALUES (?, ?)",
+        [("0x1", "agent-a")],
+    )
+    conn.commit()
+    return conn
+
+
+def test_state_is_uncalibrated_when_no_ground_truth_covers_the_range(tmp_path):
+    data = build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert data.labeled_count == 0
+    assert calibration_state(data) == "uncalibrated"
+
+
+def test_state_is_calibrated_when_every_reported_transaction_is_labeled(tmp_path):
+    data = build_report(labeled_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert data.labeled_count == data.reported_count
+    assert calibration_state(data) == "calibrated"
+
+
+def test_state_is_partial_when_some_are_labeled(tmp_path):
+    data = build_report(partly_labeled_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert 0 < data.labeled_count < data.reported_count
+    assert calibration_state(data) == "partial"
+
+
+def test_uncalibrated_report_says_confidently_is_uncalibrated_here(tmp_path):
+    rendered = render_summary(build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31"))
+    assert "uncalibrated here" in rendered
+    assert "unmeasured" in rendered
+
+
+def test_partial_report_states_how_many_were_labeled(tmp_path):
+    rendered = render_summary(
+        build_report(partly_labeled_db(tmp_path), "2026-08-01", "2026-08-31")
+    )
+    assert "measured on" in rendered.lower()
+    # The reader must be able to see how thin the evidence is.
+    assert "of" in rendered
+
+
+def test_calibrated_report_adds_no_disclaimer(tmp_path):
+    rendered = render_summary(build_report(labeled_db(tmp_path), "2026-08-01", "2026-08-31"))
+    assert "uncalibrated" not in rendered
+
+
+def test_the_disclaimer_is_not_tax_or_accounting_advice(tmp_path):
+    rendered = render_summary(
+        build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31")
+    ).lower()
+    for forbidden in ("you should", "deductible", "taxable", "file ", "consult"):
+        assert forbidden not in rendered
+
+
+def test_calibration_state_never_moves_any_money_figure(tmp_path):
+    # The three helpers seed identical transactions and differ only in
+    # ground_truth rows, so every money figure must be identical across all
+    # three states. The disclaimer changes what is claimed, never what is
+    # counted.
+    reports = [
+        build_report(helper(tmp_path / name), "2026-08-01", "2026-08-31")
+        for name, helper in (
+            ("un", unlabeled_db),
+            ("part", partly_labeled_db),
+            ("full", labeled_db),
+        )
+    ]
+    assert {calibration_state(r) for r in reports} == {
+        "uncalibrated",
+        "partial",
+        "calibrated",
+    }
+    for field in (
+        "confident_micro_usdc",
+        "uncertain_micro_usdc",
+        "gross_micro_usdc",
+        "refunded_micro_usdc",
+        "net_micro_usdc",
+    ):
+        values = {getattr(r, field) for r in reports}
+        assert len(values) == 1, f"{field} moved between calibration states: {values}"
+
+
+def test_confident_total_is_the_hand_computed_figure(tmp_path):
+    # Derived by hand from unlabeled_db's seed rows, not from build_report:
+    #   0xa sends twice (0x1: 3,000,000 and 0x2: 1,000,000) -> sender_counts["0xa"]
+    #   == 2 >= min_occurrences (2), so sender_match fires -> CONFIDENT.
+    #     0x1 + 0x2 = 3,000,000 + 1,000,000 = 4,000,000
+    #   0xb sends once (0x3: 2,000,000) -> sender_counts["0xb"] == 1
+    #   < min_occurrences, so sender_match does not fire -> UNCERTAIN, excluded.
+    #   confident total = 4,000,000 (0xb's 2,000,000 is not included)
+    data = build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert data.confident_micro_usdc == 4_000_000
+
+
+def test_service_section_is_suppressed_when_nothing_in_range_has_a_memo(tmp_path):
+    # unlabeled_db's transactions all have memo NULL, as chain data does.
+    rendered = render_summary(build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31"))
+    assert "carries no memo" in rendered
+    assert "seller's request log" in rendered
+    assert "No service identified" not in rendered
+
+
+def test_service_section_renders_normally_when_a_memo_exists(tmp_path):
+    rendered = render_summary(build_report(both_axes_db(tmp_path), "2026-08-01", "2026-08-31"))
+    assert "carries no memo" not in rendered
+
+
+def test_memo_count_counts_only_non_null_memos(tmp_path):
+    assert build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31").memo_count == 0
+
+
+def test_suppression_does_not_change_any_money_figure(tmp_path):
+    # Suppressing a section must not alter gross, net, or the confident total.
+    data = build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert data.net_micro_usdc == data.gross_micro_usdc - data.refunded_micro_usdc
+    rendered = render_summary(data)
+    assert format_usdc(data.net_micro_usdc) in rendered
