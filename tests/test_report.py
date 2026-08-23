@@ -8,7 +8,7 @@ from ledger.db import connect, init_schema, load_transactions
 from ledger.ingest import ingest_from_dir
 from ledger.models import TX_TYPE_REFUND
 from ledger.money import usdc_to_micro
-from ledger.report import build_report, render_summary, write_csv
+from ledger.report import build_report, calibration_state, render_summary, write_csv
 
 
 def seed(conn, rows):
@@ -499,9 +499,6 @@ def test_csv_carries_both_axes(tmp_path: Path):
     assert first["service_label"] == "service:weather-api"
 
 
-from ledger.report import calibration_state
-
-
 def unlabeled_db(tmp_path: Path):
     """Real-chain shape: no memo, and no ground_truth coverage at all."""
     conn = connect(tmp_path / "u.db")
@@ -516,16 +513,6 @@ def unlabeled_db(tmp_path: Path):
     )
     run_categorize(conn)
     return conn
-
-
-def _expected_confident_total(tmp_path: Path) -> int:
-    """The confident total unlabeled_db produces, derived (not copied).
-
-    Built against a separate sub-path so this does not collide with a
-    unlabeled_db(tmp_path) already seeded earlier in the same test.
-    """
-    conn = unlabeled_db(tmp_path / "expected")
-    return build_report(conn, "2026-08-01", "2026-08-31").confident_micro_usdc
 
 
 def labeled_db(tmp_path: Path):
@@ -616,7 +603,42 @@ def test_the_disclaimer_is_not_tax_or_accounting_advice(tmp_path):
         assert forbidden not in rendered
 
 
-def test_calibration_state_never_moves_the_confident_total(tmp_path):
-    # The disclaimer changes what is claimed, never what is counted.
-    unlabeled = build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31")
-    assert unlabeled.confident_micro_usdc == _expected_confident_total(tmp_path)
+def test_calibration_state_never_moves_any_money_figure(tmp_path):
+    # The three helpers seed identical transactions and differ only in
+    # ground_truth rows, so every money figure must be identical across all
+    # three states. The disclaimer changes what is claimed, never what is
+    # counted.
+    reports = [
+        build_report(helper(tmp_path / name), "2026-08-01", "2026-08-31")
+        for name, helper in (
+            ("un", unlabeled_db),
+            ("part", partly_labeled_db),
+            ("full", labeled_db),
+        )
+    ]
+    assert {calibration_state(r) for r in reports} == {
+        "uncalibrated",
+        "partial",
+        "calibrated",
+    }
+    for field in (
+        "confident_micro_usdc",
+        "uncertain_micro_usdc",
+        "gross_micro_usdc",
+        "refunded_micro_usdc",
+        "net_micro_usdc",
+    ):
+        values = {getattr(r, field) for r in reports}
+        assert len(values) == 1, f"{field} moved between calibration states: {values}"
+
+
+def test_confident_total_is_the_hand_computed_figure(tmp_path):
+    # Derived by hand from unlabeled_db's seed rows, not from build_report:
+    #   0xa sends twice (0x1: 3,000,000 and 0x2: 1,000,000) -> sender_counts["0xa"]
+    #   == 2 >= min_occurrences (2), so sender_match fires -> CONFIDENT.
+    #     0x1 + 0x2 = 3,000,000 + 1,000,000 = 4,000,000
+    #   0xb sends once (0x3: 2,000,000) -> sender_counts["0xb"] == 1
+    #   < min_occurrences, so sender_match does not fire -> UNCERTAIN, excluded.
+    #   confident total = 4,000,000 (0xb's 2,000,000 is not included)
+    data = build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert data.confident_micro_usdc == 4_000_000
