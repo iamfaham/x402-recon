@@ -7,7 +7,7 @@ from ledger.categorize import run_categorize
 from ledger.db import connect, init_schema, load_transactions
 from ledger.ingest import ingest_from_dir
 from ledger.models import TX_TYPE_REFUND
-from ledger.money import usdc_to_micro
+from ledger.money import format_usdc, usdc_to_micro
 from ledger.report import build_report, calibration_state, render_summary, write_csv
 
 
@@ -642,3 +642,28 @@ def test_confident_total_is_the_hand_computed_figure(tmp_path):
     #   confident total = 4,000,000 (0xb's 2,000,000 is not included)
     data = build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31")
     assert data.confident_micro_usdc == 4_000_000
+
+
+def test_service_section_is_suppressed_when_nothing_in_range_has_a_memo(tmp_path):
+    # unlabeled_db's transactions all have memo NULL, as chain data does.
+    rendered = render_summary(build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31"))
+    assert "carries no memo" in rendered
+    assert "seller's request log" in rendered
+    assert "No service identified" not in rendered
+
+
+def test_service_section_renders_normally_when_a_memo_exists(tmp_path):
+    rendered = render_summary(build_report(both_axes_db(tmp_path), "2026-08-01", "2026-08-31"))
+    assert "carries no memo" not in rendered
+
+
+def test_memo_count_counts_only_non_null_memos(tmp_path):
+    assert build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31").memo_count == 0
+
+
+def test_suppression_does_not_change_any_money_figure(tmp_path):
+    # Suppressing a section must not alter gross, net, or the confident total.
+    data = build_report(unlabeled_db(tmp_path), "2026-08-01", "2026-08-31")
+    assert data.net_micro_usdc == data.gross_micro_usdc - data.refunded_micro_usdc
+    rendered = render_summary(data)
+    assert format_usdc(data.net_micro_usdc) in rendered

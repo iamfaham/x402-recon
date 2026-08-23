@@ -97,6 +97,7 @@ class ReportData:
     uncertain_micro_usdc: int
     labeled_count: int
     reported_count: int
+    memo_count: int
 
 
 def _breakdown(rows, label_key: str, tier_key: str, rule_key: str) -> list[CategoryLine]:
@@ -153,6 +154,7 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
     net = gross - refunded
     payment_count = sum(1 for r in rows if r["tx_type"] == TX_TYPE_PAYMENT)
     refund_count = sum(1 for r in rows if r["tx_type"] == TX_TYPE_REFUND)
+    memo_count = sum(1 for row in rows if row["memo"] is not None)
 
     return ReportData(
         start=start,
@@ -169,6 +171,7 @@ def build_report(conn: sqlite3.Connection, start: str, end: str) -> ReportData:
         uncertain_micro_usdc=net - confident,
         labeled_count=labeled_count,
         reported_count=len(rows),
+        memo_count=memo_count,
     )
 
 
@@ -262,14 +265,25 @@ def render_summary(data: ReportData) -> str:
     ]
     lines += [_format_line(line, AXIS_PAYER) for line in data.payer_lines]
 
-    lines += [
-        "",
-        "What they paid for (net of refunds)",
-        "-----------------------------------",
-        "  Grouped by the memo the payer sent. These groupings describe what was",
-        "  bought; they are not a claim about who bought it.",
-    ]
-    lines += [_format_line(line, AXIS_SERVICE) for line in data.service_lines]
+    if data.memo_count == 0:
+        lines += [
+            "",
+            "What they paid for",
+            "------------------",
+            "  This data carries no memo, so nothing here describes what was",
+            "  bought. On-chain transfers do not record which resource was",
+            "  purchased - that lives in the seller's request log, not on the",
+            "  chain.",
+        ]
+    else:
+        lines += [
+            "",
+            "What they paid for (net of refunds)",
+            "-----------------------------------",
+            "  Grouped by the memo the payer sent. These groupings describe what was",
+            "  bought; they are not a claim about who bought it.",
+        ]
+        lines += [_format_line(line, AXIS_SERVICE) for line in data.service_lines]
 
     lines += [
         "",
