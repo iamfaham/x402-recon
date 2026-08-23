@@ -60,7 +60,13 @@ def fetch_transactions(
 
     payments: list[Transaction] = []
     for log in inbound_logs:
-        timestamp = client.block_timestamp(log.get("blockNumber", "0x0"))
+        block_number = log.get("blockNumber")
+        if block_number is None:
+            rejects.append(
+                (log.get("transactionHash", "<unknown>"), "log has no blockNumber")
+            )
+            continue
+        timestamp = client.block_timestamp(block_number)
         transaction = _decode(log, timestamp, TX_TYPE_PAYMENT, rejects)
         if transaction is not None:
             payments.append(transaction)
@@ -85,7 +91,13 @@ def fetch_transactions(
                     )
                 )
                 continue
-        timestamp = client.block_timestamp(log.get("blockNumber", "0x0"))
+        block_number = log.get("blockNumber")
+        if block_number is None:
+            rejects.append(
+                (log.get("transactionHash", "<unknown>"), "log has no blockNumber")
+            )
+            continue
+        timestamp = client.block_timestamp(block_number)
         transaction = _decode(log, timestamp, TX_TYPE_REFUND, rejects)
         if transaction is not None:
             # `log_to_transaction` decodes the raw ERC-20 Transfer direction:

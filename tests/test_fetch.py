@@ -137,6 +137,22 @@ def test_a_malformed_log_is_rejected_with_a_reason_and_the_rest_survive():
     assert [tx_hash for tx_hash, _ in result.rejects] == ["0xbad"]
 
 
+def test_a_log_with_no_block_number_is_rejected_not_dated_to_genesis():
+    bad = {
+        "transactionHash": "0xnoblk",
+        "topics": [TRANSFER_TOPIC0, _padded(PAYER), _padded(RECEIVER)],
+        "data": "0x0f4240",
+        # blockNumber deliberately omitted
+    }
+    result = fetch_transactions(
+        _client([_log("0xa", PAYER, RECEIVER, "0x0f4240"), bad], []),
+        receiver=RECEIVER, from_block=0, to_block=10,
+    )
+    assert all(t.tx_hash != "0xnoblk" for t in result.transactions)
+    assert any(tx_hash == "0xnoblk" and "blockNumber" in reason
+               for tx_hash, reason in result.rejects)
+
+
 def test_only_the_native_usdc_contract_is_queried():
     transport = FakeTransport([], [])
     fetch_transactions(
