@@ -57,6 +57,74 @@ be rationalised afterwards:
 - **Over ~5,000/month from 1,000+ distinct payers** → a genuine reconciliation
   problem, and the top receivers are the outreach list.
 
+## PROBE RUN — 2026-08-24 — result
+
+The probe turned out not to need a chain scan. The x402 Bazaar publishes, per
+service, exactly the two numbers the boundary above is written against:
+`l30DaysTotalCalls` and `l30DaysUniquePayers`. Public, unauthenticated:
+
+    GET https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=100
+
+Live results, sorted by calls, with the ratio that turned out to matter:
+
+| Service | Calls / 30d | Unique payers | **Calls per payer** |
+|---|---:|---:|---:|
+| onesource (25 endpoints, summed) | 15,244 | 1,075 | 14.2 |
+| tavily | 8,701 | 249 | **34.9** |
+| exa | 3,575 | 89 | **40.2** |
+| stableenrich | 816 | 78 | 10.5 |
+| ottoai | 780 | 126 | 6.2 |
+
+### The finding
+
+**Only OneSource clears the pre-registered bar, and it clears it on traffic
+that is almost certainly not commerce.** Taken per endpoint rather than summed,
+its calls-per-payer ratio is between **1.00 and 1.23** — every payer called
+once and never came back. That is the signature of agents probing the Bazaar
+directory, or of wash traffic. It matches the independent Artemis estimate that
+roughly half of x402 activity is self-dealing.
+
+The services with genuine repeat-usage patterns — Tavily at 34.9 calls per
+payer, Exa at 40.2 — are the real businesses here, and they sit at 3,500–8,700
+payments a month from **fewer than 250 distinct payers**. That is a real
+bookkeeping annoyance. It is not obviously a bookkeeping *crisis*, and both are
+funded companies that likely already have finance tooling.
+
+### Verdict against the boundary fixed before the probe
+
+**MARGINAL, tipping toward no-product-yet.** Nobody has the profile that makes
+this acute — thousands of transactions from thousands of distinct payers. The
+one candidate that does on paper fails the smell test decisively.
+
+Per the boundary as written: revisit in two quarters. **Do not build v0.3 yet.**
+
+### Caveats, stated so the verdict can be re-checked
+
+- The Bazaar lists only services using the CDP facilitator with the bazaar
+  extension enabled. Large sellers running their own facilitator are invisible
+  to it. This is a floor, not a census.
+- The fetch may have truncated; one source cites 112+ registered services
+  against the ~31 returned here. The tail is smaller than the head either way.
+- These are the *top* services. The median is far below everything tabulated.
+
+### The thing the probe found that wasn't being looked for
+
+Separating real commerce from probe traffic took one ratio — calls per payer —
+and about thirty seconds. Nobody in this ecosystem can currently tell the
+difference, and roughly half of all reported activity is noise.
+
+Ledger already computes that signal. `sender_match` groups by repeat sender;
+the "who paid you" axis is exactly a distinct-payer count, and repeat-versus-
+one-shot is what the confident/uncertain split already measures. A tool that
+tells an x402 seller *"of your 15,244 payments last month, 14,000 were one-shot
+probes and 1,200 were real repeat customers"* answers a question people have
+today, on data that exists today — where tax reconciliation answers a question
+they will have when the volume arrives.
+
+That is a wedge worth weighing against the current one before writing another
+release. It is not a recommendation yet; it is the strongest thing the probe
+surfaced and it should not be lost.
+
 ## How this changes the outreach
 
 The original seven targets in `outreach.md` were inferred from the market
