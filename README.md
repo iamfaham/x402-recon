@@ -47,6 +47,9 @@ uv run ledger --db sample/ledger.db ingest --from sample/data
 uv run ledger --db sample/ledger.db categorize
 uv run ledger --db sample/ledger.db report --from 2026-08-01 --to 2026-09-30 --csv sample/report.csv
 uv run ledger --db sample/ledger.db evaluate
+
+# Who actually came back: returning customers vs one-shot traffic.
+uv run ledger --db sample/ledger.db customers --from 2026-08-01 --to 2026-08-31
 ```
 
 On real data, `fetch` replaces `simulate` and two extra stages appear:

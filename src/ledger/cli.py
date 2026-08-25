@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ledger.categorize import run_categorize
+from ledger.customers import build_customer_report, render_customer_report
 from ledger.db import SchemaVersionError, connect, init_schema
 from ledger.evaluate import render_axis_results, run_evaluate
 from ledger.fetch import fetch_transactions, format_fetch_summary, write_fetched
@@ -84,6 +85,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--to", dest="end", required=True, type=_valid_date, help="YYYY-MM-DD"
     )
     report.add_argument("--csv", help="also write line-item detail to this CSV path")
+
+    customers = sub.add_parser(
+        "customers", help="split payers into returning vs one-shot for a date range"
+    )
+    customers.add_argument(
+        "--from", dest="start", required=True, type=_valid_date, help="YYYY-MM-DD"
+    )
+    customers.add_argument(
+        "--to", dest="end", required=True, type=_valid_date, help="YYYY-MM-DD"
+    )
 
     sub.add_parser("evaluate", help="score categorization against ground truth")
 
@@ -168,6 +179,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.csv:
             written = write_csv(conn, args.start, args.end, Path(args.csv))
             print(f"\nWrote {written} rows to {args.csv}")
+        return 0
+
+    if args.command == "customers":
+        print(render_customer_report(build_customer_report(conn, args.start, args.end)))
         return 0
 
     if args.command == "evaluate":
