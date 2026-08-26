@@ -33,7 +33,26 @@ A "no" on both is a genuinely useful answer and means shelving this. Say so in t
 
 ---
 
-## Who to contact
+## Send these three tonight. Nothing else yet.
+
+In this order. Stop here and wait for replies — if you send ten and hear nothing,
+you cannot tell whether the message is wrong or the market is empty. Three
+messages, each opening with the recipient's own numbers, is a clean test.
+
+| # | Target | Route | Use | Why this one |
+|---|---|---|---|---|
+| **1** | **OneSource** (blockparty-global) | GitHub `blockparty-global/1s-mcp` issue or discussion; `app.onesource.io` support | **Message B** | Send first. You are *giving* them something they almost certainly don't know — ~99% of their payers appear exactly once. Highest reply probability of the three, because it's information before it's a question. They run an MCP server and bill through Stripe, so a real person reads that repo. |
+| **2** | **Tavily** — Assaf Elovic, Rotem Weiss | [tavily.com/contact](https://www.tavily.com/contact); LinkedIn to either founder | **Message A** | Best-qualified target on the directory: 8,701 payments, 249 payers, 34.9 each. They published [their own x402 blog post](https://www.tavily.com/blog/tavily-on-x402) — open by referencing it, it proves you're not mass-mailing. |
+| **3** | **Exa** — Will Bryk | [exa.ai](https://exa.ai) contact; X @ExaAILabs | **Message A** | Highest repeat ratio anywhere on the directory at 40.2. Was the top guess on the pre-data list and the data confirmed it. |
+
+If **none of the three replies within a week**, that is a result: the two
+best-qualified sellers in the ecosystem plus the highest-volume one don't care
+enough to answer a question about their own data. Log it and apply the boundary.
+
+If **any of them says "we can't see that split"**, ask immediately for a sample of
+their payment data. That's the conversation this whole release exists to have.
+
+## Full candidate list (for later, not tonight)
 
 Numbers are live from the Bazaar discovery API, retrieved 2026-08-24. **Contact channels
 below need verifying before you send** — they're the obvious public routes, not confirmed
