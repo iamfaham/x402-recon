@@ -7,6 +7,7 @@ decision is testable offline against a recorded log.
 import json
 from datetime import datetime, timezone
 
+from x402_recon.keccak import topic0
 from x402_recon.models import TIMESTAMP_FORMAT, Transaction
 
 # Circle's native USDC on Base (FiatTokenProxy), 6 decimals.
@@ -17,8 +18,15 @@ USDC_BASE_MAINNET = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 # implicit in the absence of a second address.
 USDBC_BASE_MAINNET_EXCLUDED = "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca"
 
-# keccak256("Transfer(address,address,uint256)")
-TRANSFER_TOPIC0 = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+# Derived rather than pasted. tests/test_chain.py still asserts the literal
+# value, which was pinned from an independent source before this project had
+# a keccak implementation - so the derivation and the constant check each other.
+TRANSFER_TOPIC0 = topic0("Transfer(address,address,uint256)")
+
+# Emitted by EIP-3009 transferWithAuthorization, which is how x402 settles.
+# Indexed on the AUTHORIZER (the payer), not the receiver - which is why it
+# cannot be used to filter by recipient. See verify.py for how it is used.
+AUTHORIZATION_USED_TOPIC0 = topic0("AuthorizationUsed(address,bytes32)")
 
 CHAIN_NAME = "base"
 
