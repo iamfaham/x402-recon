@@ -116,15 +116,49 @@ def test_fetch_rejects_are_preserved_not_discarded(conn, tmp_path):
 
 
 def test_rejects_accumulate_across_multiple_gaps(conn, tmp_path):
-    record_range(conn, 100, 149)  # pre-cache the first half
-    client = FakeClient()
+    # Two disjoint pre-cached islands leave TWO real gaps: (121,149) and
+    # (171,200). Verified: missing_ranges(conn, 100, 200) after these two
+    # record_range calls returns exactly two ranges, so the orchestrator's
+    # loop genuinely runs twice.
+    record_range(conn, 100, 120)
+    record_range(conn, 150, 170)
+
+    class RejectingClient(FakeClient):
+        def get_logs(self, *, address, topics, from_block, to_block):
+            logs = super().get_logs(
+                address=address, topics=topics, from_block=from_block, to_block=to_block
+            )
+            if topics[2] is not None:  # inbound query only
+                logs.append(
+                    {"transactionHash": f"0xbad{from_block}", "topics": ["0xwrong"]}
+                )
+            return logs
+
     overview = run_overview(
         address=ADDRESS, start_date="2026-08-01", end_date="2026-08-31",
-        client=client, conn=conn, work_dir=tmp_path / "w",
+        client=RejectingClient(), conn=conn, work_dir=tmp_path / "w",
         from_block=100, to_block=200,
     )
-    # Two gap-iterations worth of ingest happen here (the pre-cached range
-    # plus the fresh 150-200 fetch, re-ingesting the same work_dir file);
-    # the assertion is just that .rejects is the right TYPE and doesn't
-    # crash - the point is it must not raise and must return a list.
-    assert isinstance(overview.rejects, list)
+    rejected_hashes = {tx_hash for tx_hash, _ in overview.rejects}
+    # One rejected hash per gap iteration - confirms accumulation across
+    # BOTH gaps, not just the last one.
+    assert "0xbad121" in rejected_hashes
+    assert "0xbad171" in rejected_hashes
+
+
+def test_ingest_side_rejects_are_preserved(conn, tmp_path, monkeypatch):
+    from x402_recon.ingest import IngestResult
+
+    def fake_ingest(conn, source_dir):
+        return IngestResult(
+            inserted=0, skipped_duplicates=0, rejects=[("0xbadrow", "malformed amount")]
+        )
+
+    monkeypatch.setattr("x402_recon.run.ingest_from_dir", fake_ingest)
+
+    overview = run_overview(
+        address=ADDRESS, start_date="2026-08-01", end_date="2026-08-31",
+        client=FakeClient(), conn=conn, work_dir=tmp_path / "w",
+        from_block=100, to_block=200,
+    )
+    assert ("0xbadrow", "malformed amount") in overview.rejects
