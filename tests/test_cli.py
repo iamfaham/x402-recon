@@ -309,6 +309,30 @@ def test_a_bare_address_runs_the_overview(tmp_path, capsys, monkeypatch):
     assert captured["address"] == "0x" + "99" * 20
 
 
+def test_from_without_to_is_an_error(capsys, monkeypatch):
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+    code = main(["0x" + "99" * 20, "--from", "2026-07-01"])
+    assert code == 2
+    assert "both --from and --to are required together" in capsys.readouterr().out
+
+
+def test_to_without_from_is_an_error(capsys, monkeypatch):
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+    code = main(["0x" + "99" * 20, "--to", "2026-07-31"])
+    assert code == 2
+    assert "both --from and --to are required together" in capsys.readouterr().out
+
+
+def test_last_combined_with_from_to_is_an_error(capsys, monkeypatch):
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+    code = main([
+        "0x" + "99" * 20, "--last", "30d",
+        "--from", "2026-07-01", "--to", "2026-07-31",
+    ])
+    assert code == 2
+    assert "cannot be combined" in capsys.readouterr().out
+
+
 def test_a_malformed_address_is_rejected_by_name(capsys):
     assert main(["not-an-address"]) == 2
     assert "not a valid address" in capsys.readouterr().out

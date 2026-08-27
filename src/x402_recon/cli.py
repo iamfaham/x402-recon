@@ -180,6 +180,10 @@ def _run_overview_command(args: argparse.Namespace) -> int:
     try:
         client = RpcClient(args.rpc_url)
 
+        if args.last and (args.start or args.end):
+            print("Error: --last cannot be combined with --from/--to")
+            return 2
+
         if args.last:
             try:
                 days = _parse_last(args.last)
@@ -192,6 +196,9 @@ def _run_overview_command(args: argparse.Namespace) -> int:
         elif args.start and args.end:
             start_date, end_date = args.start, args.end
             from_block, to_block = resolve_range(client, args.start, args.end)
+        elif args.start or args.end:
+            print("Error: both --from and --to are required together")
+            return 2
         else:
             start_date = (today - timedelta(days=30)).isoformat()
             end_date = today.isoformat()
