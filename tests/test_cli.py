@@ -287,3 +287,123 @@ def test_fetch_never_opens_the_database(tmp_path, monkeypatch):
             "--to-block", "10",
         ]
     ) == 0
+
+
+def test_a_bare_address_runs_the_overview(tmp_path, capsys, monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        class Fake:
+            pass
+        return Fake()
+
+    monkeypatch.setattr("x402_recon.cli.run_overview", fake_run)
+    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o: "OVERVIEW")
+    monkeypatch.setattr("x402_recon.cli.days_ago_range", lambda c, d: (1, 2))
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+
+    code = main(["0x" + "99" * 20, "--no-cache"])
+    assert code == 0
+    assert "OVERVIEW" in capsys.readouterr().out
+    assert captured["address"] == "0x" + "99" * 20
+
+
+def test_from_without_to_is_an_error(capsys, monkeypatch):
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+    code = main(["0x" + "99" * 20, "--from", "2026-07-01"])
+    assert code == 2
+    assert "both --from and --to are required together" in capsys.readouterr().out
+
+
+def test_to_without_from_is_an_error(capsys, monkeypatch):
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+    code = main(["0x" + "99" * 20, "--to", "2026-07-31"])
+    assert code == 2
+    assert "both --from and --to are required together" in capsys.readouterr().out
+
+
+def test_last_combined_with_from_to_is_an_error(capsys, monkeypatch):
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+    code = main([
+        "0x" + "99" * 20, "--last", "30d",
+        "--from", "2026-07-01", "--to", "2026-07-31",
+    ])
+    assert code == 2
+    assert "cannot be combined" in capsys.readouterr().out
+
+
+def test_a_malformed_address_is_rejected_by_name(capsys):
+    assert main(["not-an-address"]) == 2
+    assert "not a valid address" in capsys.readouterr().out
+
+
+def test_no_address_and_no_url_prints_help_and_fails(capsys):
+    assert main([]) == 2
+
+
+def test_discovery_failure_is_reported_not_raised(capsys, monkeypatch):
+    from x402_recon.discover import DiscoveryError
+
+    def explode(url, **kwargs):
+        raise DiscoveryError("answered 200, not 402 - it did not ask for payment")
+
+    monkeypatch.setattr("x402_recon.cli.discover", explode)
+    assert main(["--url", "https://example.test/x"]) == 2
+    assert "did not ask for payment" in capsys.readouterr().out
+
+
+def test_existing_subcommands_still_work(tmp_path, capsys):
+    assert main(["simulate", "--out", str(tmp_path), "--count", "10"]) == 0
+
+
+def test_work_dir_is_removed_after_a_successful_run(tmp_path, monkeypatch):
+    created = {}
+
+    def fake_mkdtemp():
+        d = tmp_path / "work"
+        d.mkdir()
+        created["path"] = d
+        return str(d)
+
+    monkeypatch.setattr("x402_recon.cli.tempfile.mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+    monkeypatch.setattr("x402_recon.cli.days_ago_range", lambda c, d: (1, 2))
+    monkeypatch.setattr("x402_recon.cli.connect", lambda p: object())
+    monkeypatch.setattr("x402_recon.cli.init_schema", lambda c: None)
+
+    class Fake:
+        rejects = []
+
+    monkeypatch.setattr("x402_recon.cli.run_overview", lambda **k: Fake())
+    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o: "OVERVIEW")
+
+    main(["0x" + "99" * 20, "--no-cache"])
+    assert not created["path"].exists()
+
+
+def test_the_no_cache_database_file_is_deleted_after_use(tmp_path, monkeypatch):
+    made_path = {}
+
+    def fake_mkstemp(suffix=".db"):
+        p = tmp_path / "nocache.db"
+        p.touch()
+        made_path["path"] = p
+        return (0, str(p))
+
+    monkeypatch.setattr("x402_recon.cli.tempfile.mkstemp", fake_mkstemp)
+    monkeypatch.setattr("x402_recon.cli.tempfile.mkdtemp", lambda: str(tmp_path / "w"))
+    (tmp_path / "w").mkdir(exist_ok=True)
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+    monkeypatch.setattr("x402_recon.cli.days_ago_range", lambda c, d: (1, 2))
+    monkeypatch.setattr("x402_recon.cli.connect", lambda p: object())
+    monkeypatch.setattr("x402_recon.cli.init_schema", lambda c: None)
+
+    class Fake:
+        rejects = []
+
+    monkeypatch.setattr("x402_recon.cli.run_overview", lambda **k: Fake())
+    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o: "OVERVIEW")
+
+    main(["0x" + "99" * 20, "--no-cache"])
+    assert not made_path["path"].exists()

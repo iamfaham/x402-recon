@@ -126,3 +126,22 @@ def test_log_to_transaction_rejects_a_transfer_with_too_few_topics():
     log = {"transactionHash": "0xeee555", "topics": [TRANSFER_TOPIC0], "data": "0x64"}
     with pytest.raises(ValueError, match="expected 3 topics"):
         log_to_transaction(log, "2026-07-01T12:00:00Z", TX_TYPE_PAYMENT)
+
+
+def test_authorization_used_topic_is_derived_not_pasted():
+    from x402_recon.chain import AUTHORIZATION_USED_TOPIC0
+    from x402_recon.keccak import topic0
+
+    assert AUTHORIZATION_USED_TOPIC0 == topic0("AuthorizationUsed(address,bytes32)")
+    assert AUTHORIZATION_USED_TOPIC0 == (
+        "0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5"
+    )
+
+
+def test_transfer_topic_is_derived_and_still_equals_the_pinned_literal():
+    # The literal in test_transfer_topic0_is_the_erc20_transfer_signature was
+    # pinned from an external source before keccak existed here. This asserts
+    # the derivation reproduces it, so each validates the other.
+    from x402_recon.keccak import topic0
+
+    assert TRANSFER_TOPIC0 == topic0("Transfer(address,address,uint256)")

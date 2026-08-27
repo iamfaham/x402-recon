@@ -10,7 +10,7 @@ from pathlib import Path
 
 from x402_recon.models import TX_TYPE_PAYMENT, Transaction
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class SchemaVersionError(RuntimeError):
@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS hazards (
 
 CREATE INDEX IF NOT EXISTS idx_transactions_timestamp
     ON transactions(timestamp);
+
+CREATE TABLE IF NOT EXISTS fetched_ranges (
+    from_block INTEGER NOT NULL,
+    to_block   INTEGER NOT NULL
+);
 """
 
 
