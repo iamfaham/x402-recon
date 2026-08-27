@@ -146,7 +146,7 @@ def render_overview(overview: Overview) -> str:
             "The rest are grouped by the same rule, unmeasured."
         )
 
-    if overview.sample is not None:
+    if overview.sample is not None and overview.source_url is not None:
         sample_line = render_sample(overview.sample)
         if sample_line:
             notes.append(sample_line)

@@ -112,13 +112,37 @@ def test_the_uncalibrated_caveat_is_present_on_unlabeled_data(conn):
 
 
 def test_the_sample_line_renders_when_a_sample_was_taken(conn):
+    # The sample note is only meaningful once an address is a confirmed
+    # payTo (see test_the_sample_note_never_renders_for_a_raw_address below),
+    # so this exercises it with source_url set.
+    text = render_overview(
+        build_overview(
+            _loyal(conn), ADDRESS, "2026-08-01", "2026-08-31",
+            source_url="https://x402.example.test/search",
+            sample=SampleResult(checked=10, settled_via_eip3009=10, total_available=10),
+        )
+    )
+    assert "Sampled 10" in text
+
+
+def test_the_sample_note_never_renders_for_a_raw_address(conn):
+    # The sample note says "x402" / "EIP-3009" - that wording assumes the
+    # address is a confirmed payTo. A raw address has no such confirmation,
+    # so the note must not render even when a sample was taken. (The header
+    # and provenance line legitimately contain the literal string "x402" -
+    # the header names the tool, and the provenance line explicitly denies
+    # x402 confirmation - so this checks for the specific leaking wording
+    # rather than a blanket "x402" absence.)
     text = render_overview(
         build_overview(
             _loyal(conn), ADDRESS, "2026-08-01", "2026-08-31",
             sample=SampleResult(checked=10, settled_via_eip3009=10, total_available=10),
         )
     )
-    assert "Sampled 10" in text
+    assert "Sampled" not in text
+    assert "EIP-3009" not in text
+    assert "settled the way x402 does" not in text
+    assert "consistent with x402" not in text
 
 
 def test_an_empty_range_says_so_instead_of_printing_an_empty_table(conn):
