@@ -122,9 +122,16 @@ def _looks_like_range_complaint(error: Exception) -> bool:
 
     Endpoints word this differently, so match on substance rather than an
     exact string. A miss here costs one failed request, not correctness.
+
+    Deliberately excludes rate-limit wording ("rate limit", "too many
+    requests") even though it can contain "limit" - narrowing the span in
+    response to a rate limit doesn't fix the actual problem and creates a
+    feedback loop (narrower span -> more requests -> more rate-limiting).
     """
     text = str(error).lower()
+    if "rate limit" in text or "too many requests" in text or "429" in text:
+        return False
     return any(
         phrase in text
-        for phrase in ("range", "too large", "too many", "limit", "exceed")
+        for phrase in ("range", "too large", "block range", "results")
     )

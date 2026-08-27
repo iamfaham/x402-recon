@@ -48,6 +48,37 @@ def test_get_logs_splits_a_range_wider_than_the_span_cap():
     assert min(transport.spans) <= span, "should have narrowed to fit the cap"
 
 
+def test_rate_limit_errors_are_not_treated_as_range_complaints():
+    # A rate-limited response must propagate as a real error, not trigger
+    # permanent span-narrowing - narrowing doesn't fix a rate limit and
+    # creates a retry storm against the exact endpoint under load.
+    transport = FakeTransport(
+        [{"error": {"code": -32005, "message": "rate limit exceeded"}}]
+    )
+    with pytest.raises(RpcError, match="rate limit"):
+        RpcClient(transport=transport).get_logs(
+            address="0xtoken", topics=["0xtopic"], from_block=0, to_block=100
+        )
+
+
+def test_too_many_requests_is_not_treated_as_a_range_complaint():
+    transport = FakeTransport(
+        [{"error": {"code": -32005, "message": "429 Too Many Requests"}}]
+    )
+    with pytest.raises(RpcError):
+        RpcClient(transport=transport).get_logs(
+            address="0xtoken", topics=["0xtopic"], from_block=0, to_block=100
+        )
+
+
+def test_a_genuine_range_complaint_still_narrows():
+    transport = NarrowingTransport(limit=10_000)
+    logs = RpcClient(transport=transport).get_logs(
+        address="0xtoken", topics=["0xtopic"], from_block=0, to_block=20_000
+    )
+    assert len(logs) > 1
+
+
 def test_get_logs_makes_one_request_when_the_range_fits():
     transport = FakeTransport([{"result": []}])
     RpcClient(transport=transport).get_logs(
