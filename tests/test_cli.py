@@ -331,3 +331,55 @@ def test_discovery_failure_is_reported_not_raised(capsys, monkeypatch):
 
 def test_existing_subcommands_still_work(tmp_path, capsys):
     assert main(["simulate", "--out", str(tmp_path), "--count", "10"]) == 0
+
+
+def test_work_dir_is_removed_after_a_successful_run(tmp_path, monkeypatch):
+    created = {}
+
+    def fake_mkdtemp():
+        d = tmp_path / "work"
+        d.mkdir()
+        created["path"] = d
+        return str(d)
+
+    monkeypatch.setattr("x402_recon.cli.tempfile.mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+    monkeypatch.setattr("x402_recon.cli.days_ago_range", lambda c, d: (1, 2))
+    monkeypatch.setattr("x402_recon.cli.connect", lambda p: object())
+    monkeypatch.setattr("x402_recon.cli.init_schema", lambda c: None)
+
+    class Fake:
+        rejects = []
+
+    monkeypatch.setattr("x402_recon.cli.run_overview", lambda **k: Fake())
+    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o: "OVERVIEW")
+
+    main(["0x" + "99" * 20, "--no-cache"])
+    assert not created["path"].exists()
+
+
+def test_the_no_cache_database_file_is_deleted_after_use(tmp_path, monkeypatch):
+    made_path = {}
+
+    def fake_mkstemp(suffix=".db"):
+        p = tmp_path / "nocache.db"
+        p.touch()
+        made_path["path"] = p
+        return (0, str(p))
+
+    monkeypatch.setattr("x402_recon.cli.tempfile.mkstemp", fake_mkstemp)
+    monkeypatch.setattr("x402_recon.cli.tempfile.mkdtemp", lambda: str(tmp_path / "w"))
+    (tmp_path / "w").mkdir(exist_ok=True)
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+    monkeypatch.setattr("x402_recon.cli.days_ago_range", lambda c, d: (1, 2))
+    monkeypatch.setattr("x402_recon.cli.connect", lambda p: object())
+    monkeypatch.setattr("x402_recon.cli.init_schema", lambda c: None)
+
+    class Fake:
+        rejects = []
+
+    monkeypatch.setattr("x402_recon.cli.run_overview", lambda **k: Fake())
+    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o: "OVERVIEW")
+
+    main(["0x" + "99" * 20, "--no-cache"])
+    assert not made_path["path"].exists()

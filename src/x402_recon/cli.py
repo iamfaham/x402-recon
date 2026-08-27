@@ -5,7 +5,9 @@ while tuning.
 """
 
 import argparse
+import os
 import re
+import shutil
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -203,42 +205,57 @@ def _run_overview_command(args: argparse.Namespace) -> int:
         return 2
 
     if args.no_cache:
-        db_path = Path(tempfile.mkstemp(suffix=".db")[1])
+        fd, tmp_name = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        db_path = Path(tmp_name)
     else:
         cache_dir().mkdir(parents=True, exist_ok=True)
         db_path = cache_path(address)
 
+    conn = None
     try:
-        conn = connect(db_path)
-        init_schema(conn)
-    except SchemaVersionError as exc:
-        print(f"Error: {exc}")
-        print(f"Delete {db_path} and run again.")
-        return 2
+        try:
+            conn = connect(db_path)
+            init_schema(conn)
+        except SchemaVersionError as exc:
+            print(f"Error: {exc}")
+            print(f"Delete {db_path} and run again.")
+            return 2
 
-    try:
-        overview = run_overview(
-            address=address,
-            start_date=start_date,
-            end_date=end_date,
-            client=client,
-            conn=conn,
-            source_url=source_url,
-            take_sample=not args.no_sample,
-            work_dir=Path(tempfile.mkdtemp()),
-            from_block=from_block,
-            to_block=to_block,
-        )
-    except RpcError as exc:
-        print(f"Error: {exc}")
-        print("If this endpoint is rate-limiting, pass --rpc-url with your own provider.")
-        return 2
+        work_dir = Path(tempfile.mkdtemp())
+        try:
+            overview = run_overview(
+                address=address,
+                start_date=start_date,
+                end_date=end_date,
+                client=client,
+                conn=conn,
+                source_url=source_url,
+                take_sample=not args.no_sample,
+                work_dir=work_dir,
+                from_block=from_block,
+                to_block=to_block,
+            )
+        except RpcError as exc:
+            print(f"Error: {exc}")
+            print(
+                "If this endpoint is rate-limiting, pass --rpc-url with your own provider."
+            )
+            return 2
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
-    print(render_overview(overview))
-    rejects = getattr(overview, "rejects", None)
-    if rejects:
-        print(f"\n{len(rejects)} row(s) were skipped and excluded from these totals.")
-    return 0
+        print(render_overview(overview))
+        rejects = getattr(overview, "rejects", None)
+        if rejects:
+            print(f"\n{len(rejects)} row(s) were skipped and excluded from these totals.")
+        return 0
+    finally:
+        if args.no_cache:
+            close = getattr(conn, "close", None)
+            if close is not None:
+                close()
+            db_path.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
