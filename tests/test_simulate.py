@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from ledger.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND, UNGROUPABLE
-from ledger.simulate import (
+from x402_recon.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND, UNGROUPABLE
+from x402_recon.simulate import (
     HAZARD_INTERLEAVED_ONE_OFF,
     HAZARD_MEMO_DRIFT,
     HAZARD_REFUND,
@@ -168,7 +168,7 @@ def test_rotating_address_hazard_actually_fragments_the_cascade():
     # not sufficient — each address must repeat at least twice for
     # sender_match to fire and actually split this one payer into more than
     # one predicted group. Run the real cascade and assert the split happens.
-    from ledger.categorize import categorize_transactions
+    from x402_recon.categorize import categorize_transactions
 
     batch = generate_batch(count=120, seed=1)
     tagged = [
@@ -221,8 +221,8 @@ def test_memo_drift_is_seen_by_memo_match_not_intercepted_by_sender_match():
         "intercept these transactions before memo_match ever sees them"
     )
 
-    from ledger.categorize import categorize_transactions
-    from ledger.models import (
+    from x402_recon.categorize import categorize_transactions
+    from x402_recon.models import (
         AXIS_PAYER,
         AXIS_SERVICE,
         RULE_MEMO_MATCH,
@@ -365,7 +365,7 @@ def test_write_batch_writes_all_four_files(tmp_path: Path):
     assert json.loads(st_path.read_text()) == batch.service_truth
 
 
-from ledger.simulate import HAZARD_SHARED_MEMO_DIFFERENT_SERVICES
+from x402_recon.simulate import HAZARD_SHARED_MEMO_DIFFERENT_SERVICES
 
 
 def _shared_memo_diff_services(batch):

@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from ledger.db import connect, init_schema
-from ledger.labeling import LABELING_INSTRUCTIONS, build_worksheet, write_worksheet
+from x402_recon.db import connect, init_schema
+from x402_recon.labeling import LABELING_INSTRUCTIONS, build_worksheet, write_worksheet
 
 PAYER_A = "0x" + "11" * 20
 ONE_OFF = "0x" + "33" * 20

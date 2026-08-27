@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from ledger.cli import main
+from x402_recon.cli import main
 
 
 def test_full_pipeline_produces_a_report(tmp_path: Path, capsys):
@@ -245,12 +245,12 @@ def test_report_shows_both_breakdowns(tmp_path: Path, capsys):
 
 
 def test_fetch_is_rejected_cleanly_when_the_endpoint_errors(tmp_path, capsys, monkeypatch):
-    from ledger.rpc import RpcError
+    from x402_recon.rpc import RpcError
 
     def explode(*args, **kwargs):
         raise RpcError("eth_getLogs failed: range too wide")
 
-    monkeypatch.setattr("ledger.cli.fetch_transactions", explode)
+    monkeypatch.setattr("x402_recon.cli.fetch_transactions", explode)
     code = main(
         [
             "fetch",
@@ -268,16 +268,16 @@ def test_fetch_never_opens_the_database(tmp_path, monkeypatch):
     # fetch writes files and must work before any database exists, exactly as
     # simulate does. If it fell through to connect(), a fresh user would be
     # forced to create a database to download their own transactions.
-    from ledger.fetch import FetchResult
+    from x402_recon.fetch import FetchResult
 
     monkeypatch.setattr(
-        "ledger.cli.fetch_transactions", lambda *a, **k: FetchResult([], [])
+        "x402_recon.cli.fetch_transactions", lambda *a, **k: FetchResult([], [])
     )
 
     def fail(*args, **kwargs):
         raise AssertionError("fetch must not open the database")
 
-    monkeypatch.setattr("ledger.cli.connect", fail)
+    monkeypatch.setattr("x402_recon.cli.connect", fail)
     assert main(
         [
             "fetch",

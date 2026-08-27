@@ -3,12 +3,12 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
-from ledger.categorize import run_categorize
-from ledger.db import connect, init_schema, load_transactions
-from ledger.ingest import ingest_from_dir
-from ledger.models import TX_TYPE_REFUND
-from ledger.money import format_usdc, usdc_to_micro
-from ledger.report import build_report, calibration_state, render_summary, write_csv
+from x402_recon.categorize import run_categorize
+from x402_recon.db import connect, init_schema, load_transactions
+from x402_recon.ingest import ingest_from_dir
+from x402_recon.models import TX_TYPE_REFUND
+from x402_recon.money import format_usdc, usdc_to_micro
+from x402_recon.report import build_report, calibration_state, render_summary, write_csv
 
 
 def seed(conn, rows):
@@ -199,8 +199,8 @@ def test_near_miss_addresses_receive_different_category_labels():
     """
     import dataclasses
 
-    from ledger.categorize import categorize_transactions
-    from ledger.simulate import generate_batch
+    from x402_recon.categorize import categorize_transactions
+    from x402_recon.simulate import generate_batch
 
     batch = generate_batch(count=120, seed=1)
     near_miss_groups = {"agent-nearmiss-a", "agent-nearmiss-b"}
@@ -357,7 +357,7 @@ def test_money_reconciles_with_refunds(tmp_path: Path):
     assert csv_net == ingested_net
 
 
-from ledger.models import AXIS_PAYER, AXIS_SERVICE, CONFIDENT, UNCERTAIN
+from x402_recon.models import AXIS_PAYER, AXIS_SERVICE, CONFIDENT, UNCERTAIN
 
 
 def both_axes_db(tmp_path: Path):

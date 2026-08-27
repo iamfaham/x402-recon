@@ -1,4 +1,4 @@
-"""Command-line interface for Ledger.
+"""Command-line interface for x402-recon.
 
 Each pipeline stage is its own subcommand so stages can be re-run independently
 while tuning.
@@ -9,18 +9,18 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from ledger.categorize import run_categorize
-from ledger.customers import build_customer_report, render_customer_report
-from ledger.db import SchemaVersionError, connect, init_schema
-from ledger.evaluate import render_axis_results, run_evaluate
-from ledger.fetch import fetch_transactions, format_fetch_summary, write_fetched
-from ledger.ingest import IngestError, format_ingest_summary, ingest_from_dir
-from ledger.labeling import build_worksheet, write_worksheet
-from ledger.models import AXIS_COUNT
-from ledger.report import build_report, render_summary, write_csv
-from ledger.rpc import DEFAULT_BASE_RPC_URL, RpcClient, RpcError
-from ledger.shape import build_shape, render_shape
-from ledger.simulate import generate_batch, write_batch
+from x402_recon.categorize import run_categorize
+from x402_recon.customers import build_customer_report, render_customer_report
+from x402_recon.db import SchemaVersionError, connect, init_schema
+from x402_recon.evaluate import render_axis_results, run_evaluate
+from x402_recon.fetch import fetch_transactions, format_fetch_summary, write_fetched
+from x402_recon.ingest import IngestError, format_ingest_summary, ingest_from_dir
+from x402_recon.labeling import build_worksheet, write_worksheet
+from x402_recon.models import AXIS_COUNT
+from x402_recon.report import build_report, render_summary, write_csv
+from x402_recon.rpc import DEFAULT_BASE_RPC_URL, RpcClient, RpcError
+from x402_recon.shape import build_shape, render_shape
+from x402_recon.simulate import generate_batch, write_batch
 
 _DATE_FORMAT = "%Y-%m-%d"
 
@@ -52,7 +52,7 @@ def _valid_date(value: str) -> str:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="ledger",
+        prog="x402-recon",
         description=(
             "Organize agent stablecoin payments into a readable summary. "
             "This tool reads and summarizes payments you have already received. "

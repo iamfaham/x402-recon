@@ -8,7 +8,7 @@ data.
 import sqlite3
 from pathlib import Path
 
-from ledger.models import TX_TYPE_PAYMENT, Transaction
+from x402_recon.models import TX_TYPE_PAYMENT, Transaction
 
 SCHEMA_VERSION = 3
 

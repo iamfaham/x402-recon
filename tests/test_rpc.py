@@ -1,6 +1,6 @@
 import pytest
 
-from ledger.rpc import MAX_BLOCK_SPAN, RpcClient, RpcError
+from x402_recon.rpc import MAX_BLOCK_SPAN, RpcClient, RpcError
 
 
 class FakeTransport:

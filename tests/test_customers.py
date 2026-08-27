@@ -2,7 +2,7 @@
 
 import pytest
 
-from ledger.customers import (
+from x402_recon.customers import (
     BAND_ONE_SHOT,
     BAND_RETURNING,
     BAND_TRIED_TWICE,
@@ -10,7 +10,7 @@ from ledger.customers import (
     build_customer_report,
     render_customer_report,
 )
-from ledger.db import connect, init_schema
+from x402_recon.db import connect, init_schema
 
 RECEIVER = "0x" + "99" * 20
 

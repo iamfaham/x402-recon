@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from ledger.money import MICRO_PER_USDC, format_usdc, micro_to_decimal, usdc_to_micro
+from x402_recon.money import MICRO_PER_USDC, format_usdc, micro_to_decimal, usdc_to_micro
 
 
 def test_micro_per_usdc_is_six_decimals():

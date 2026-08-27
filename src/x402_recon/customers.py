@@ -18,8 +18,8 @@ this reads the same signal and reports it in the terms a seller thinks in.
 import sqlite3
 from dataclasses import dataclass
 
-from ledger.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND
-from ledger.money import format_usdc
+from x402_recon.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND
+from x402_recon.money import format_usdc
 
 BAND_RETURNING = "returning"
 BAND_TRIED_TWICE = "tried_twice"

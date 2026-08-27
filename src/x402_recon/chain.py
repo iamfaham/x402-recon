@@ -7,7 +7,7 @@ decision is testable offline against a recorded log.
 import json
 from datetime import datetime, timezone
 
-from ledger.models import TIMESTAMP_FORMAT, Transaction
+from x402_recon.models import TIMESTAMP_FORMAT, Transaction
 
 # Circle's native USDC on Base (FiatTokenProxy), 6 decimals.
 USDC_BASE_MAINNET = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"

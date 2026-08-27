@@ -12,8 +12,8 @@ Nothing in this module may import the scorer.
 import sqlite3
 from dataclasses import dataclass
 
-from ledger.config import DEFAULT_CONFIG, CascadeConfig
-from ledger.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND
+from x402_recon.config import DEFAULT_CONFIG, CascadeConfig
+from x402_recon.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND
 
 _BANDS = ("once", "twice", "three_or_more")
 
@@ -82,7 +82,7 @@ def build_shape(
 
 
 def render_shape(report: ShapeReport) -> str:
-    from ledger.money import format_usdc
+    from x402_recon.money import format_usdc
 
     span = (
         f"{report.first_timestamp} to {report.last_timestamp}"

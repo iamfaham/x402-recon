@@ -1,6 +1,6 @@
 import pytest
 
-from ledger.chain import (
+from x402_recon.chain import (
     TRANSFER_TOPIC0,
     USDBC_BASE_MAINNET_EXCLUDED,
     USDC_BASE_MAINNET,
@@ -9,7 +9,7 @@ from ledger.chain import (
     decode_amount_micro_usdc,
     log_to_transaction,
 )
-from ledger.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND
+from x402_recon.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND
 
 
 def test_native_usdc_address_is_the_circle_proxy():

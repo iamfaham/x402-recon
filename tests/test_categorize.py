@@ -1,6 +1,6 @@
-from ledger.categorize import build_memo_counts, build_sender_counts, is_generic_memo
-from ledger.config import DEFAULT_CONFIG
-from ledger.models import Transaction
+from x402_recon.categorize import build_memo_counts, build_sender_counts, is_generic_memo
+from x402_recon.config import DEFAULT_CONFIG
+from x402_recon.models import Transaction
 
 
 def tx(tx_hash: str, sender: str, memo: str | None = None, ts: str = "2026-08-18T10:00:00Z") -> Transaction:
@@ -59,11 +59,11 @@ def test_memo_counts_excludes_generic_memos():
     assert None not in counts
 
 
-from ledger.categorize import (
+from x402_recon.categorize import (
     categorize_transactions,
     run_categorize,
 )
-from ledger.models import (
+from x402_recon.models import (
     CONFIDENT,
     RULE_MEMO_MATCH,
     RULE_NONE,
@@ -71,7 +71,7 @@ from ledger.models import (
     UNCATEGORIZED,
     UNCERTAIN,
 )
-from ledger.db import connect, init_schema
+from x402_recon.db import connect, init_schema
 
 
 def by_hash(cats, txns):
@@ -181,8 +181,8 @@ def test_run_categorize_is_idempotent(tmp_path):
     assert count == 4
 
 
-from ledger.categorize import categorize_services
-from ledger.models import AXIS_PAYER, AXIS_SERVICE
+from x402_recon.categorize import categorize_services
+from x402_recon.models import AXIS_PAYER, AXIS_SERVICE
 
 
 def by_axis(cats):

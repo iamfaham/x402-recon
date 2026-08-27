@@ -1,6 +1,6 @@
 import pytest
 
-from ledger.evaluate import (
+from x402_recon.evaluate import (
     CALIBRATION_THRESHOLD,
     MIN_VERDICT_SAMPLE,
     AxisResults,
@@ -11,7 +11,7 @@ from ledger.evaluate import (
     score,
     service_confidence_verdict,
 )
-from ledger.models import (
+from x402_recon.models import (
     CONFIDENT,
     RULE_MEMO_MATCH,
     RULE_NONE,
@@ -20,7 +20,7 @@ from ledger.models import (
     UNCERTAIN,
     UNGROUPABLE,
 )
-from ledger.evaluate import failing_confident_rules, payer_confidence_verdict
+from x402_recon.evaluate import failing_confident_rules, payer_confidence_verdict
 
 
 def build(predicted, truth, tiers=None, rules=None, hazards=None):

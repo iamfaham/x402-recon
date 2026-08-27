@@ -1,7 +1,7 @@
 import pytest
 
-from ledger.db import connect, init_schema
-from ledger.shape import build_shape, render_shape
+from x402_recon.db import connect, init_schema
+from x402_recon.shape import build_shape, render_shape
 
 PAYER_A = "0x" + "11" * 20
 PAYER_B = "0x" + "22" * 20
@@ -100,5 +100,5 @@ def test_shape_module_does_not_import_the_scorer():
     # not be able to compute a score at all.
     import pathlib
 
-    source = pathlib.Path("src/ledger/shape.py").read_text()
+    source = pathlib.Path("src/x402_recon/shape.py").read_text()
     assert "evaluate" not in source

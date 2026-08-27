@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from ledger.models import TIMESTAMP_FORMAT, TX_TYPE_PAYMENT, TX_TYPE_REFUND, Transaction
+from x402_recon.models import TIMESTAMP_FORMAT, TX_TYPE_PAYMENT, TX_TYPE_REFUND, Transaction
 
 _VALID_TX_TYPES = frozenset({TX_TYPE_PAYMENT, TX_TYPE_REFUND})
 

@@ -9,7 +9,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from ledger.models import TX_TYPE_PAYMENT
+from x402_recon.models import TX_TYPE_PAYMENT
 
 LABELING_INSTRUCTIONS = (
     "Fill in `true_group` for each sender you can identify, and record what "

@@ -1,6 +1,6 @@
 from dataclasses import fields
 
-from ledger.models import (
+from x402_recon.models import (
     AXIS_PAYER,
     AXIS_SERVICE,
     CONFIDENT,

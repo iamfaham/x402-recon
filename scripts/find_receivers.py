@@ -6,10 +6,10 @@ RESEARCH TOOL, NOT PART OF THE SHIPPED PACKAGE. It answers one question:
     Is there any single receiver whose transaction count and distinct-payer
     count are large enough that reconciling by hand actually hurts?
 
-That is the question that decides whether Ledger has a customer. Market data
+That is the question that decides whether this tool has a customer. Market data
 as of mid-2026 says x402 moves ~$28k/day ecosystem-wide with roughly half of
 that estimated to be wash or self-dealing, so dollar volume is NOT the signal
-to look for. Ledger's value scales with line-item count times distinct
+to look for. The tool's value scales with line-item count times distinct
 counterparties: 10,000 payments of $0.30 from 3,000 different payers is a real
 reconciliation problem; 10,000 payments from one payer is a spreadsheet.
 
@@ -41,13 +41,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from ledger.chain import (  # noqa: E402
+from x402_recon.chain import (  # noqa: E402
     TRANSFER_TOPIC0,
     USDC_BASE_MAINNET,
     decode_address,
     decode_amount_micro_usdc,
 )
-from ledger.rpc import DEFAULT_BASE_RPC_URL, RpcClient, RpcError  # noqa: E402
+from x402_recon.rpc import DEFAULT_BASE_RPC_URL, RpcClient, RpcError  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -155,7 +155,7 @@ def main() -> int:
         f"{int(counts[best] * scale):,} payments from {len(senders[best]):,}+ payers."
     )
     print(
-        "That is the number that decides whether Ledger has a customer. A few\n"
+        "That is the number that decides whether this tool has a customer. A few\n"
         "hundred a month is a spreadsheet. Tens of thousands from thousands of\n"
         "distinct payers is a real problem worth paying to solve.\n"
         "Extrapolation assumes this window is typical - check a second window\n"
