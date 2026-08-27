@@ -179,6 +179,37 @@ def test_it_gives_up_rather_than_narrowing_forever():
     assert min(transport.spans) >= MIN_BLOCK_SPAN
 
 
+def test_narrowing_snaps_to_a_round_span_rather_than_halving_past_it():
+    # Pure halving from 100,000 would land at 6,250, which is SMALLER than
+    # the common 10,000 cap it's approaching - more chunks than the old
+    # fixed-10,000 chunking, not fewer. Snapping to a round value avoids that.
+    transport = NarrowingTransport(limit=10_000)
+    RpcClient(transport=transport).get_logs(
+        address="0xtoken", topics=["0xtopic"], from_block=0, to_block=20_000
+    )
+    accepted = [s for s in transport.spans if s <= 10_000]
+    assert 10_000 in accepted or max(accepted) >= 6_250, (
+        f"should have snapped near the cap, not undershot it: {accepted}"
+    )
+
+
+def test_a_month_long_range_needs_fewer_chunks_than_the_old_fixed_size():
+    # Regression guard for the specific defect: adaptive chunking against a
+    # 10,000-block cap must not need MORE round trips than v0.2's fixed
+    # 10,000-block chunking did over the same range.
+    span = 1_300_000  # ~30 days at 2s/block
+    transport = NarrowingTransport(limit=10_000)
+    RpcClient(transport=transport).get_logs(
+        address="0xtoken", topics=["0xtopic"], from_block=0, to_block=span
+    )
+    accepted_chunks = sum(1 for s in transport.spans if s <= 10_000)
+    old_fixed_chunk_count = span // 10_000 + 1
+    assert accepted_chunks <= old_fixed_chunk_count, (
+        f"{accepted_chunks} accepted chunks vs {old_fixed_chunk_count} for "
+        "the old fixed chunking - adaptive chunking must not be a regression"
+    )
+
+
 def test_transaction_receipt_returns_the_receipt():
     transport = FakeTransport([{"result": {"logs": [{"topics": ["0xaa"]}]}}])
     receipt = RpcClient(transport=transport).transaction_receipt("0xdead")

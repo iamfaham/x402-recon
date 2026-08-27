@@ -92,7 +92,7 @@ class RpcClient:
                 )
             except RpcError as exc:
                 if self._span > MIN_BLOCK_SPAN and _looks_like_range_complaint(exc):
-                    self._span = max(MIN_BLOCK_SPAN, self._span // 2)
+                    self._span = max(MIN_BLOCK_SPAN, _narrow(self._span))
                     continue
                 raise
             logs.extend(chunk or [])
@@ -115,6 +115,23 @@ class RpcClient:
         formatted = block_timestamp_to_iso(block["timestamp"])
         self._block_timestamps[block_number_hex] = formatted
         return formatted
+
+
+_ROUND_SPANS = (50_000, 20_000, 10_000, 5_000, 2_000, 1_000)
+
+
+def _narrow(current_span: int) -> int:
+    """The next span to try after a rejection.
+
+    Prefers snapping to a round, commonly-accepted value over blind halving,
+    since pure halving from a large optimistic start can overshoot past a
+    round cap (e.g. 100,000 halves to 6,250, past the common 10,000 limit)
+    and end up making MORE requests than a fixed chunk size would have.
+    """
+    for candidate in _ROUND_SPANS:
+        if candidate < current_span:
+            return candidate
+    return max(MIN_BLOCK_SPAN, current_span // 2)
 
 
 def _looks_like_range_complaint(error: Exception) -> bool:
