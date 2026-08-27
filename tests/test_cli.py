@@ -287,3 +287,47 @@ def test_fetch_never_opens_the_database(tmp_path, monkeypatch):
             "--to-block", "10",
         ]
     ) == 0
+
+
+def test_a_bare_address_runs_the_overview(tmp_path, capsys, monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        class Fake:
+            pass
+        return Fake()
+
+    monkeypatch.setattr("x402_recon.cli.run_overview", fake_run)
+    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o: "OVERVIEW")
+    monkeypatch.setattr("x402_recon.cli.days_ago_range", lambda c, d: (1, 2))
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+
+    code = main(["0x" + "99" * 20, "--no-cache"])
+    assert code == 0
+    assert "OVERVIEW" in capsys.readouterr().out
+    assert captured["address"] == "0x" + "99" * 20
+
+
+def test_a_malformed_address_is_rejected_by_name(capsys):
+    assert main(["not-an-address"]) == 2
+    assert "not a valid address" in capsys.readouterr().out
+
+
+def test_no_address_and_no_url_prints_help_and_fails(capsys):
+    assert main([]) == 2
+
+
+def test_discovery_failure_is_reported_not_raised(capsys, monkeypatch):
+    from x402_recon.discover import DiscoveryError
+
+    def explode(url, **kwargs):
+        raise DiscoveryError("answered 200, not 402 - it did not ask for payment")
+
+    monkeypatch.setattr("x402_recon.cli.discover", explode)
+    assert main(["--url", "https://example.test/x"]) == 2
+    assert "did not ask for payment" in capsys.readouterr().out
+
+
+def test_existing_subcommands_still_work(tmp_path, capsys):
+    assert main(["simulate", "--out", str(tmp_path), "--count", "10"]) == 0

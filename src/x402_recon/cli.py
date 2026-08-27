@@ -5,24 +5,37 @@ while tuning.
 """
 
 import argparse
+import re
 import sys
-from datetime import datetime
+import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from x402_recon.blocks import days_ago_range, resolve_range
+from x402_recon.cache import cache_dir, cache_path
 from x402_recon.categorize import run_categorize
 from x402_recon.customers import build_customer_report, render_customer_report
 from x402_recon.db import SchemaVersionError, connect, init_schema
+from x402_recon.discover import DiscoveryError, discover
 from x402_recon.evaluate import render_axis_results, run_evaluate
 from x402_recon.fetch import fetch_transactions, format_fetch_summary, write_fetched
 from x402_recon.ingest import IngestError, format_ingest_summary, ingest_from_dir
 from x402_recon.labeling import build_worksheet, write_worksheet
 from x402_recon.models import AXIS_COUNT
+from x402_recon.overview import render_overview
 from x402_recon.report import build_report, render_summary, write_csv
 from x402_recon.rpc import DEFAULT_BASE_RPC_URL, RpcClient, RpcError
+from x402_recon.run import run_overview
 from x402_recon.shape import build_shape, render_shape
 from x402_recon.simulate import generate_batch, write_batch
 
 _DATE_FORMAT = "%Y-%m-%d"
+_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+_DEFAULT_DB_NAME = "x402-recon.db"
+_KNOWN_COMMANDS = {
+    "simulate", "ingest", "categorize", "shape", "label", "report",
+    "customers", "evaluate", "fetch", "discover",
+}
 
 
 def _valid_date(value: str) -> str:
@@ -59,8 +72,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "It never holds or moves funds, and it is not tax or accounting advice."
         ),
     )
-    parser.add_argument("--db", default="ledger.db", help="SQLite database path")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--db", default=None, help="SQLite database path")
+    parser.add_argument("address", nargs="?", help="the receiving address to report on")
+    parser.add_argument("--url", help="an x402 endpoint; its payTo is discovered")
+    parser.add_argument("--last", help="window ending now, e.g. 30d")
+    parser.add_argument("--from", dest="start", type=_valid_date, help="YYYY-MM-DD")
+    parser.add_argument("--to", dest="end", type=_valid_date, help="YYYY-MM-DD")
+    parser.add_argument("--rpc-url", default=DEFAULT_BASE_RPC_URL)
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help=f"use a temporary database instead of {cache_dir()}",
+    )
+    parser.add_argument(
+        "--no-sample", action="store_true", help="skip the x402 settlement sample"
+    )
+    sub = parser.add_subparsers(dest="command", required=False)
 
     simulate = sub.add_parser("simulate", help="generate a synthetic transaction batch")
     simulate.add_argument("--out", required=True, help="directory to write JSON into")
@@ -108,11 +135,127 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_BASE_RPC_URL,
         help="JSON-RPC endpoint (override to use your own node)",
     )
+
+    discover_cmd = sub.add_parser(
+        "discover", help="read the receiving address out of an x402 endpoint's 402 response"
+    )
+    discover_cmd.add_argument("url", help="an x402 endpoint")
+
     return parser
 
 
+def _parse_last(value: str) -> int:
+    """Parse `--last` values like '30d' into a day count."""
+    match = re.fullmatch(r"(\d+)d", value)
+    if not match:
+        raise ValueError(f"invalid --last {value!r}: expected a form like '30d'")
+    return int(match.group(1))
+
+
+def _run_overview_command(args: argparse.Namespace) -> int:
+    """Discover/validate an address, resolve its block range, and render the overview."""
+    if not args.address and not args.url:
+        _build_parser().print_help()
+        return 2
+
+    address = args.address
+    source_url = None
+    if args.url:
+        try:
+            requirements = discover(args.url)
+        except DiscoveryError as exc:
+            print(f"Error: {exc}")
+            return 2
+        address = requirements.pay_to
+        source_url = args.url
+
+    if not _ADDRESS_RE.match(address or ""):
+        print(f"Error: {address!r} is not a valid address")
+        return 2
+
+    today = datetime.now(timezone.utc).date()
+
+    try:
+        client = RpcClient(args.rpc_url)
+
+        if args.last:
+            try:
+                days = _parse_last(args.last)
+            except ValueError as exc:
+                print(f"Error: {exc}")
+                return 2
+            start_date = (today - timedelta(days=days)).isoformat()
+            end_date = today.isoformat()
+            from_block, to_block = days_ago_range(client, days)
+        elif args.start and args.end:
+            start_date, end_date = args.start, args.end
+            from_block, to_block = resolve_range(client, args.start, args.end)
+        else:
+            start_date = (today - timedelta(days=30)).isoformat()
+            end_date = today.isoformat()
+            from_block, to_block = days_ago_range(client, 30)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 2
+    except RpcError as exc:
+        print(f"Error: {exc}")
+        print("If this endpoint is rate-limiting, pass --rpc-url with your own provider.")
+        return 2
+
+    if args.no_cache:
+        db_path = Path(tempfile.mkstemp(suffix=".db")[1])
+    else:
+        cache_dir().mkdir(parents=True, exist_ok=True)
+        db_path = cache_path(address)
+
+    try:
+        conn = connect(db_path)
+        init_schema(conn)
+    except SchemaVersionError as exc:
+        print(f"Error: {exc}")
+        print(f"Delete {db_path} and run again.")
+        return 2
+
+    try:
+        overview = run_overview(
+            address=address,
+            start_date=start_date,
+            end_date=end_date,
+            client=client,
+            conn=conn,
+            source_url=source_url,
+            take_sample=not args.no_sample,
+            work_dir=Path(tempfile.mkdtemp()),
+            from_block=from_block,
+            to_block=to_block,
+        )
+    except RpcError as exc:
+        print(f"Error: {exc}")
+        print("If this endpoint is rate-limiting, pass --rpc-url with your own provider.")
+        return 2
+
+    print(render_overview(overview))
+    rejects = getattr(overview, "rejects", None)
+    if rejects:
+        print(f"\n{len(rejects)} row(s) were skipped and excluded from these totals.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    # `address` and the subparsers positional both sit at the top level, and
+    # argparse's PARSER-nargs greedily claims the lone bare token even when a
+    # subcommand isn't what's meant - so a plain address would otherwise be
+    # rejected as an unrecognized command. Pull it out ourselves whenever the
+    # first bare token isn't a known subcommand, before argparse ever sees it.
+    address_arg = None
+    if argv and not argv[0].startswith("-") and argv[0] not in _KNOWN_COMMANDS:
+        address_arg = argv.pop(0)
+
     args = _build_parser().parse_args(argv)
+    if address_arg is not None:
+        args.address = address_arg
 
     if args.command == "simulate":
         batch = generate_batch(count=args.count, seed=args.seed)
@@ -138,8 +281,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {path}")
         return 0
 
+    if args.command == "discover":
+        try:
+            requirements = discover(args.url)
+        except DiscoveryError as exc:
+            print(f"Error: {exc}")
+            return 2
+        print(f"payTo:   {requirements.pay_to}")
+        print(f"network: {requirements.network}")
+        print(f"asset:   {requirements.asset}")
+        if requirements.amount is not None:
+            print(f"amount:  {requirements.amount}")
+        return 0
+
+    if args.command is None:
+        return _run_overview_command(args)
+
     try:
-        conn = connect(Path(args.db))
+        conn = connect(Path(args.db or _DEFAULT_DB_NAME))
         init_schema(conn)
     except SchemaVersionError as exc:
         print(f"Error: {exc}")
