@@ -155,11 +155,11 @@ def test_tx_type_defaults_to_payment_and_round_trips(tmp_path: Path):
     assert loaded["0xb"].tx_type == TX_TYPE_REFUND
 
 
-def test_schema_version_is_three(tmp_path: Path):
+def test_schema_version_is_four(tmp_path: Path):
     conn = connect(tmp_path / "t.db")
     init_schema(conn)
-    assert SCHEMA_VERSION == 3
-    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == 3
+    assert SCHEMA_VERSION == 4
+    assert conn.execute("SELECT version FROM schema_version").fetchone()["version"] == 4
 
 
 def test_service_truth_table_exists(tmp_path: Path):
