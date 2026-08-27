@@ -58,12 +58,15 @@ def run_overview(
     """
     work_dir = Path(work_dir)
 
+    all_rejects: list[tuple[str, str]] = []
     for gap_start, gap_end in missing_ranges(conn, from_block, to_block):
         result = fetch_transactions(
             client, receiver=address, from_block=gap_start, to_block=gap_end
         )
         write_fetched(result, work_dir)
-        ingest_from_dir(conn, work_dir)
+        all_rejects.extend(result.rejects)
+        ingest_result = ingest_from_dir(conn, work_dir)
+        all_rejects.extend(ingest_result.rejects)
         record_range(conn, gap_start, gap_end)
 
     run_categorize(conn)
@@ -74,5 +77,11 @@ def run_overview(
         sample = sample_x402_settlement(client, hashes)
 
     return build_overview(
-        conn, address, start_date, end_date, source_url=source_url, sample=sample
+        conn,
+        address,
+        start_date,
+        end_date,
+        source_url=source_url,
+        sample=sample,
+        rejects=all_rejects,
     )

@@ -20,7 +20,7 @@ accounting treatment.
 """
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from x402_recon.customers import _BAND_LABELS, CustomerReport, build_customer_report
 from x402_recon.money import format_usdc
@@ -41,6 +41,7 @@ class Overview:
     report: ReportData
     customers: CustomerReport
     sample: SampleResult | None
+    rejects: list[tuple[str, str]] = field(default_factory=list)
 
 
 def build_overview(
@@ -51,6 +52,7 @@ def build_overview(
     *,
     source_url: str | None = None,
     sample: SampleResult | None = None,
+    rejects: list[tuple[str, str]] = (),
 ) -> Overview:
     """Gather the report and customer data for one combined view."""
     report = build_report(conn, start, end)
@@ -63,6 +65,7 @@ def build_overview(
         report=report,
         customers=customers,
         sample=sample,
+        rejects=list(rejects),
     )
 
 

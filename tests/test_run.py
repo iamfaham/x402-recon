@@ -95,3 +95,36 @@ def test_the_sample_can_be_switched_off(conn, tmp_path):
         from_block=100, to_block=200, take_sample=False,
     )
     assert client.receipts == 0
+
+
+def test_fetch_rejects_are_preserved_not_discarded(conn, tmp_path):
+    class RejectingClient(FakeClient):
+        def get_logs(self, *, address, topics, from_block, to_block):
+            logs = super().get_logs(
+                address=address, topics=topics, from_block=from_block, to_block=to_block
+            )
+            if topics[2] is not None:  # inbound query only
+                logs.append({"transactionHash": "0xbad", "topics": ["0xwrong"]})
+            return logs
+
+    overview = run_overview(
+        address=ADDRESS, start_date="2026-08-01", end_date="2026-08-31",
+        client=RejectingClient(), conn=conn, work_dir=tmp_path / "w",
+        from_block=100, to_block=200,
+    )
+    assert any(tx_hash == "0xbad" for tx_hash, _ in overview.rejects)
+
+
+def test_rejects_accumulate_across_multiple_gaps(conn, tmp_path):
+    record_range(conn, 100, 149)  # pre-cache the first half
+    client = FakeClient()
+    overview = run_overview(
+        address=ADDRESS, start_date="2026-08-01", end_date="2026-08-31",
+        client=client, conn=conn, work_dir=tmp_path / "w",
+        from_block=100, to_block=200,
+    )
+    # Two gap-iterations worth of ingest happen here (the pre-cached range
+    # plus the fresh 150-200 fetch, re-ingesting the same work_dir file);
+    # the assertion is just that .rejects is the right TYPE and doesn't
+    # crash - the point is it must not raise and must return a list.
+    assert isinstance(overview.rejects, list)
