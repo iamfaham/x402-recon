@@ -1,4 +1,4 @@
-# Ledger
+# x402-recon
 
 Reconciliation and reporting for agent-initiated stablecoin payments.
 
@@ -9,9 +9,9 @@ confidently identified and what still needs review.
 Ledger only reads and summarizes payments a business has already received. It
 never holds or moves funds, and it does not provide tax or accounting advice.
 
-## Status: v0.2
+## Status: v0.3
 
-v0.2 can read real payments off Base mainnet. `ledger fetch` pulls native-USDC
+v0.2 can read real payments off Base mainnet. `x402-recon fetch` pulls native-USDC
 transfers for one receiver address and writes the same JSON that `simulate`
 writes, so `ingest` and everything downstream are unchanged. That was the
 design bet made in v0.1c, and it held: `ingest.py` was not modified.
@@ -42,30 +42,30 @@ Two things are true of real chain data that are not true of the simulator:
 ```bash
 uv sync
 
-uv run ledger simulate --out sample/data --count 300 --seed 42
-uv run ledger --db sample/ledger.db ingest --from sample/data
-uv run ledger --db sample/ledger.db categorize
-uv run ledger --db sample/ledger.db report --from 2026-08-01 --to 2026-09-30 --csv sample/report.csv
-uv run ledger --db sample/ledger.db evaluate
+uv run x402-recon simulate --out sample/data --count 300 --seed 42
+uv run x402-recon --db sample/ledger.db ingest --from sample/data
+uv run x402-recon --db sample/ledger.db categorize
+uv run x402-recon --db sample/ledger.db report --from 2026-08-01 --to 2026-09-30 --csv sample/report.csv
+uv run x402-recon --db sample/ledger.db evaluate
 
 # Who actually came back: returning customers vs one-shot traffic.
-uv run ledger --db sample/ledger.db customers --from 2026-08-01 --to 2026-08-31
+uv run x402-recon --db sample/ledger.db customers --from 2026-08-01 --to 2026-08-31
 ```
 
 On real data, `fetch` replaces `simulate` and two extra stages appear:
 
 ```bash
-uv run ledger fetch --receiver 0xYOUR_ADDRESS --out sample/real     --from-block 34000000 --to-block 34100000
-uv run ledger --db sample/real.db ingest --from sample/real
-uv run ledger --db sample/real.db categorize
+uv run x402-recon fetch --receiver 0xYOUR_ADDRESS --out sample/real     --from-block 34000000 --to-block 34100000
+uv run x402-recon --db sample/real.db ingest --from sample/real
+uv run x402-recon --db sample/real.db categorize
 
 # Stage 1 - structure only. Reports no accuracy figure of any kind, so that
 # seeing the answer cannot influence how the sample is later labeled.
-uv run ledger --db sample/real.db shape
+uv run x402-recon --db sample/real.db shape
 
 # Stage 2 - a worksheet for a human. The tool never assigns truth: the only
 # signal it has is the sender address, which is the signal under test.
-uv run ledger --db sample/real.db label --out sample/real/worksheet.json
+uv run x402-recon --db sample/real.db label --out sample/real/worksheet.json
 ```
 
 Fill in `true_group` and `evidence` by hand using evidence **independent of the
@@ -74,10 +74,32 @@ source. Then convert the filled worksheet to `ground_truth.json` (each row
 already carries its `tx_hash`), re-ingest, and read the verdict:
 
 ```bash
-uv run ledger --db sample/real.db ingest --from sample/real
-uv run ledger --db sample/real.db evaluate
-uv run ledger --db sample/real.db report --from 2026-07-01 --to 2026-07-31
+uv run x402-recon --db sample/real.db ingest --from sample/real
+uv run x402-recon --db sample/real.db evaluate
+uv run x402-recon --db sample/real.db report --from 2026-07-01 --to 2026-07-31
 ```
+
+## Quick start: the combined overview
+
+The fastest way to see a seller's real customer breakdown:
+
+```bash
+x402-recon --url https://x402.example.com/search --last 30d
+```
+
+This discovers the seller's receiving address from their own 402
+response, fetches the range, and prints net revenue alongside a
+returning-vs-one-shot customer split. A raw address also works
+directly:
+
+```bash
+x402-recon 0xRECEIVER_ADDRESS --last 30d
+```
+
+Only an address resolved via `discover` (the `--url` form) may have
+its payments associated with x402 in the output — a raw address is
+reported as "USDC payments," since there is no 402 response backing
+that stronger claim.
 
 ## How categorization works
 
