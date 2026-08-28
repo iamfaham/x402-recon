@@ -31,6 +31,10 @@ class FakeClient:
             }
         ]
 
+    def prefetch_block_timestamps(self, block_numbers):
+        """No-op prefetch for testing."""
+        pass
+
     def block_timestamp(self, block_hex):
         return "2026-08-15T12:00:00Z"
 

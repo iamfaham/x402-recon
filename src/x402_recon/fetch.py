@@ -58,6 +58,15 @@ def fetch_transactions(
         to_block=to_block,
     )
 
+    # Resolve every timestamp we are about to need in as few round trips as
+    # possible. The loops below still call block_timestamp per log; they now
+    # hit cache instead of the network.
+    client.prefetch_block_timestamps(
+        log["blockNumber"]
+        for log in (*inbound_logs, *outbound_logs)
+        if log.get("blockNumber") is not None
+    )
+
     payments: list[Transaction] = []
     for log in inbound_logs:
         block_number = log.get("blockNumber")

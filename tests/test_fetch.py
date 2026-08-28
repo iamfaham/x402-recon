@@ -37,6 +37,13 @@ class FakeTransport:
         self.queried_addresses = []
 
     def __call__(self, payload):
+        # Handle batch calls (list of payloads)
+        if isinstance(payload, list):
+            return [self._handle_single_call(p) for p in payload]
+        # Handle single calls
+        return self._handle_single_call(payload)
+
+    def _handle_single_call(self, payload):
         if payload["method"] == "eth_getBlockByNumber":
             return {"result": {"timestamp": self.timestamp}}
         self.calls += 1
@@ -49,6 +56,24 @@ class FakeTransport:
 
 def _client(inbound, outbound):
     return RpcClient(transport=FakeTransport(inbound, outbound))
+
+
+class FakeClient(RpcClient):
+    """Test fixture that simulates RpcClient with injectable inbound/outbound logs."""
+
+    def __init__(self, inbound=None, outbound=None, timestamp="0x5f5e100"):
+        self.inbound = inbound or []
+        self.outbound = outbound or []
+        transport = FakeTransport(self.inbound, self.outbound, timestamp)
+        super().__init__(transport=transport)
+
+    def get_logs(self, *, address: str, topics: list, from_block: int, to_block: int) -> list[dict]:
+        """Return inbound or outbound logs based on the topics filter."""
+        # topics == [transfer, from, to]; a `to` filter means inbound.
+        if topics[2]:  # to filter present means inbound
+            return self.inbound
+        else:  # no to filter means outbound
+            return self.outbound
 
 
 def test_topic_for_address_left_pads_to_thirty_two_bytes():
@@ -228,3 +253,25 @@ def test_summary_reports_rejects_so_nothing_vanishes_quietly():
     summary = format_fetch_summary(result)
     assert "1 transaction" in summary
     assert "0xz" in summary
+
+
+def test_block_timestamps_are_prefetched_before_decoding():
+    # A month-long report touches thousands of distinct blocks. Resolving them
+    # one at a time dominated the first real run; prefetching collapses that
+    # into a handful of batched requests without changing any value.
+    prefetched = []
+
+    class RecordingClient(FakeClient):
+        def prefetch_block_timestamps(self, block_numbers):
+            prefetched.append(list(block_numbers))
+
+    logs = [
+        _log(f"0x{i}", PAYER, RECEIVER, "0x0f4240", block=hex(100 + i))
+        for i in range(3)
+    ]
+    client = RecordingClient()
+    client.inbound = logs
+    fetch_transactions(client, receiver=RECEIVER, from_block=0, to_block=10)
+
+    assert prefetched, "fetch_transactions must prefetch block timestamps"
+    assert set(prefetched[0]) >= {hex(100), hex(101), hex(102)}
