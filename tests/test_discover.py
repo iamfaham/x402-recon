@@ -101,6 +101,40 @@ def test_discover_uses_the_injected_transport_and_never_the_network():
     assert calls == [URL]
 
 
+def test_the_default_transport_sends_a_post_request(monkeypatch):
+    # Real x402 endpoints are POST-only APIs (search/RPC style, not static
+    # resources) - confirmed live against Tavily and Exa, both of which
+    # answer GET with a plain 404 and only respond 402 to POST. A GET-only
+    # transport can never discover a real seller's payTo.
+    from x402_recon import discover as discover_module
+
+    captured = {}
+
+    class FakeHTTPError(Exception):
+        def __init__(self, code, body):
+            self.code = code
+            self._body = body
+
+        def read(self):
+            return self._body
+
+    def fake_urlopen(request, timeout):
+        captured["method"] = request.get_method()
+        captured["data"] = request.data
+        raise FakeHTTPError(402, b'{"accepts": []}')
+
+    monkeypatch.setattr(discover_module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(discover_module.urllib.error, "HTTPError", FakeHTTPError)
+
+    try:
+        discover_module.discover(URL)
+    except discover_module.DiscoveryError:
+        pass  # the empty accepts list correctly fails discovery; irrelevant here
+
+    assert captured["method"] == "POST"
+    assert captured["data"] is not None
+
+
 def test_a_200_response_says_the_endpoint_may_not_be_paywalled():
     def transport(url):
         return 200, {"results": []}

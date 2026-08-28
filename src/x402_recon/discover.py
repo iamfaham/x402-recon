@@ -99,8 +99,15 @@ def parse_402_body(body: dict, source_url: str) -> PaymentRequirements:
 
 
 def _urllib_transport(url: str) -> tuple[int, dict]:
+    # Real x402 endpoints are POST-only APIs (search/RPC style), not static
+    # resources - confirmed live against Tavily and Exa, both of which answer
+    # GET with a plain 404 and only respond 402 to POST. An empty JSON body
+    # is enough: the 402 check happens before any request-body validation.
     request = urllib.request.Request(
-        url, headers={"User-Agent": _USER_AGENT}, method="GET"
+        url,
+        data=b"{}",
+        headers={"User-Agent": _USER_AGENT, "Content-Type": "application/json"},
+        method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS) as response:

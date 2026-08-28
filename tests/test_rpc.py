@@ -17,6 +17,53 @@ class FakeTransport:
         return self.responses.pop(0)
 
 
+def test_the_default_transport_sends_a_real_user_agent(monkeypatch):
+    # Cloudflare-fronted RPC endpoints (mainnet.base.org included) block the
+    # unmodified urllib default User-Agent outright with a 403 - confirmed
+    # live: identical requests differing only in this header get 403 with no
+    # UA and 200 with any named one. Sending no UA at all silently makes
+    # every real fetch fail before a single block is read.
+    from x402_recon import rpc as rpc_module
+
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["headers"] = {k.lower(): v for k, v in request.headers.items()}
+        raise AssertionError("stop before actually sending")
+
+    monkeypatch.setattr(rpc_module.urllib.request, "urlopen", fake_urlopen)
+
+    try:
+        rpc_module._urllib_transport("https://example.test")({"a": 1})
+    except AssertionError:
+        pass
+
+    assert "user-agent" in captured["headers"]
+    assert captured["headers"]["user-agent"] != ""
+
+
+def test_the_default_transport_turns_an_http_error_into_an_rpc_error(monkeypatch):
+    # Confirmed live: a real eth_getLogs request against mainnet.base.org can
+    # get an HTTP-level 413 "Payload Too Large" rather than a JSON-RPC error
+    # body. urlopen raises this as HTTPError, not a returned response - if it
+    # is not caught and translated, it crashes the whole run as an unhandled
+    # exception instead of reaching get_logs's adaptive-narrowing logic,
+    # which is exactly the situation that logic exists to handle.
+    import urllib.error
+
+    from x402_recon import rpc as rpc_module
+
+    def fake_urlopen(request, timeout):
+        raise urllib.error.HTTPError(
+            "https://example.test", 413, "Payload Too Large", {}, None
+        )
+
+    monkeypatch.setattr(rpc_module.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(RpcError, match="413"):
+        rpc_module._urllib_transport("https://example.test")({"a": 1})
+
+
 def test_call_returns_the_result_field():
     transport = FakeTransport([{"jsonrpc": "2.0", "id": 1, "result": "0xabc"}])
     assert RpcClient(transport=transport).call("eth_blockNumber", []) == "0xabc"

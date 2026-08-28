@@ -24,6 +24,12 @@ MIN_BLOCK_SPAN = 1_000
 
 _TIMEOUT_SECONDS = 30
 
+# Cloudflare-fronted RPC endpoints (mainnet.base.org included) block
+# requests carrying no User-Agent, or the unmodified urllib default,
+# outright with a 403. Confirmed live: identical requests differing only in
+# this header get 403 with none and 200 with any named one.
+_USER_AGENT = "x402-recon (+https://github.com/iamfaham/x402-recon)"
+
 
 class RpcError(RuntimeError):
     """The endpoint returned an error, or a response we cannot use."""
@@ -34,11 +40,28 @@ def _urllib_transport(url: str):
         request = urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS) as response:
-            return json.loads(response.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(request, timeout=_TIMEOUT_SECONDS) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # An HTTP-level error (confirmed live: a real 413 "Payload Too
+            # Large" from eth_getLogs) arrives as an exception rather than a
+            # JSON-RPC error body. Try the body first - some endpoints still
+            # return a JSON-RPC-shaped error even on a non-200 status - and
+            # fall back to the status line so the message is still
+            # classifiable by _looks_like_range_complaint below.
+            try:
+                body = json.loads(exc.read().decode("utf-8"))
+                if isinstance(body, dict) and "error" in body:
+                    raise RpcError(
+                        f"HTTP {exc.code}: {body['error'].get('message', body['error'])}"
+                    ) from exc
+            except (ValueError, AttributeError):
+                pass
+            raise RpcError(f"HTTP {exc.code}: {exc.reason}") from exc
 
     return send
 
