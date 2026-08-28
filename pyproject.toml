@@ -1,10 +1,30 @@
 [project]
 name = "x402-recon"
-version = "0.3.0"
+version = "0.4.0"
 description = "Reconciliation and customer analytics for x402 agent stablecoin payments"
-readme = "README.md"
-requires-python = ">=3.13"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.11"
 dependencies = []
+license = "MIT"
+keywords = ["x402", "usdc", "base", "stablecoin", "agents", "reconciliation", "analytics"]
+authors = [{ name = "Syed Mohammad Faham" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Accounting",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/iamfaham/x402-recon"
+Repository = "https://github.com/iamfaham/x402-recon"
+Issues = "https://github.com/iamfaham/x402-recon/issues"
 
 [project.scripts]
 x402-recon = "x402_recon.cli:run"
