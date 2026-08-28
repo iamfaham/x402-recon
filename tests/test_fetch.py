@@ -39,7 +39,15 @@ class FakeTransport:
     def __call__(self, payload):
         # Handle batch calls (list of payloads)
         if isinstance(payload, list):
-            return [self._handle_single_call(p) for p in payload]
+            return [
+                {
+                    "id": entry["id"],
+                    "result": {"timestamp": self.timestamp},
+                }
+                if entry["method"] == "eth_getBlockByNumber"
+                else self._handle_single_call(entry)
+                for entry in payload
+            ]
         # Handle single calls
         return self._handle_single_call(payload)
 
@@ -275,3 +283,27 @@ def test_block_timestamps_are_prefetched_before_decoding():
 
     assert prefetched, "fetch_transactions must prefetch block timestamps"
     assert set(prefetched[0]) >= {hex(100), hex(101), hex(102)}
+
+
+def test_prefetch_uses_batching_not_sequential_fallback():
+    # Verify that the fixture properly supports batching by returning the id
+    # field in batch responses. If batching is broken, _batch_supported flips
+    # to False and future calls fall back to sequential, defeating the
+    # performance goal of this task.
+    logs = [
+        _log(f"0x{i}", PAYER, RECEIVER, "0x0f4240", block=hex(100 + i))
+        for i in range(3)
+    ]
+    client = FakeClient()
+    client.inbound = logs
+    assert client._batch_supported is True
+
+    fetch_transactions(client, receiver=RECEIVER, from_block=0, to_block=10)
+
+    # If batching is working, _batch_supported should still be True.
+    # If it's not (e.g., the fixture is missing "id" in batch responses),
+    # it will be False and the batch path will never run again.
+    assert client._batch_supported is True, (
+        "batch timestamp resolution failed or fixture doesn't support batching; "
+        "prefetch fell back to sequential calls, defeating the performance goal"
+    )
