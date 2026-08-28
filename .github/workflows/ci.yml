@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  release:
+    types: [published]
 
 jobs:
   test:
@@ -38,3 +40,26 @@ jobs:
       - run: uv build
       - name: Check the built artifacts exist
         run: ls -l dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    # Only a published GitHub Release triggers a publish attempt — a plain
+    # push or PR never reaches this job.
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      # Trusted publishing: PyPI verifies this OIDC token against the
+      # publisher registered at pypi.org/manage/project/x402-recon/settings/publishing/
+      # (repo + workflow filename must match; no API token needed or stored).
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
