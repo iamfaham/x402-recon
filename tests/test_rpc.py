@@ -404,3 +404,146 @@ def test_a_range_complaint_still_narrows_and_does_not_sleep():
     )
     assert waits == [], "narrowing must not sleep"
     assert min(transport.spans) <= 10_000
+
+
+from x402_recon.rpc import TIMESTAMP_BATCH_SIZE
+
+
+class BatchTransport:
+    """Accepts JSON-RPC batches (a list payload) and answers in kind."""
+
+    def __init__(self, timestamps):
+        self.timestamps = timestamps  # {block_hex: seconds_hex}
+        self.payloads = []
+
+    def __call__(self, payload):
+        self.payloads.append(payload)
+        if isinstance(payload, list):
+            return [
+                {
+                    "id": entry["id"],
+                    "result": {"timestamp": self.timestamps[entry["params"][0]]},
+                }
+                for entry in payload
+            ]
+        block = payload["params"][0]
+        return {"result": {"timestamp": self.timestamps[block]}}
+
+
+def test_prefetch_fills_the_cache_in_one_batched_request():
+    blocks = {hex(n): hex(1_700_000_000 + n) for n in range(10)}
+    transport = BatchTransport(blocks)
+    client = RpcClient(transport=transport, sleep=lambda s: None)
+
+    client.prefetch_block_timestamps(list(blocks))
+
+    assert len(transport.payloads) == 1, "ten blocks should be one batch"
+    assert isinstance(transport.payloads[0], list)
+    # Every block now resolves without another request.
+    before = len(transport.payloads)
+    for block in blocks:
+        client.block_timestamp(block)
+    assert len(transport.payloads) == before, "prefetched blocks must hit cache"
+
+
+def test_batched_and_sequential_agree_exactly():
+    # The whole point of batching over interpolation: identical values.
+    blocks = {hex(n): hex(1_700_000_000 + n * 2) for n in range(5)}
+
+    batched = RpcClient(transport=BatchTransport(blocks), sleep=lambda s: None)
+    batched.prefetch_block_timestamps(list(blocks))
+
+    sequential = RpcClient(transport=BatchTransport(blocks), sleep=lambda s: None)
+
+    for block in blocks:
+        assert batched.block_timestamp(block) == sequential.block_timestamp(block)
+
+
+def test_a_large_prefetch_is_split_into_several_batches():
+    blocks = {hex(n): hex(1_700_000_000 + n) for n in range(TIMESTAMP_BATCH_SIZE + 40)}
+    transport = BatchTransport(blocks)
+    RpcClient(transport=transport, sleep=lambda s: None).prefetch_block_timestamps(
+        list(blocks)
+    )
+    assert len(transport.payloads) == 2
+
+
+def test_already_cached_blocks_are_not_refetched():
+    blocks = {hex(n): hex(1_700_000_000 + n) for n in range(4)}
+    transport = BatchTransport(blocks)
+    client = RpcClient(transport=transport, sleep=lambda s: None)
+    client.block_timestamp("0x0")          # one sequential call, now cached
+    sent_before = len(transport.payloads)
+
+    client.prefetch_block_timestamps(list(blocks))
+
+    batched = [p for p in transport.payloads[sent_before:] if isinstance(p, list)][0]
+    assert len(batched) == 3, "the cached block should not be in the batch"
+
+
+def test_an_endpoint_refusing_batches_falls_back_to_sequential():
+    blocks = {hex(n): hex(1_700_000_000 + n) for n in range(3)}
+
+    class NoBatchTransport(BatchTransport):
+        def __call__(self, payload):
+            if isinstance(payload, list):
+                self.payloads.append(payload)
+                raise RpcError("HTTP 400: batch requests are not supported", status=400)
+            return super().__call__(payload)
+
+    transport = NoBatchTransport(blocks)
+    client = RpcClient(transport=transport, sleep=lambda s: None)
+    client.prefetch_block_timestamps(list(blocks))
+
+    # It still got every timestamp, via sequential calls.
+    for block in blocks:
+        assert client.block_timestamp(block).endswith("Z")
+    assert any(not isinstance(p, dict) for p in transport.payloads), "tried a batch"
+
+
+def test_the_batch_refusal_is_remembered_and_not_re_probed():
+    blocks = {hex(n): hex(1_700_000_000 + n) for n in range(6)}
+
+    class NoBatchTransport(BatchTransport):
+        def __call__(self, payload):
+            if isinstance(payload, list):
+                self.payloads.append(payload)
+                raise RpcError("HTTP 400: batch not supported", status=400)
+            return super().__call__(payload)
+
+    transport = NoBatchTransport(blocks)
+    client = RpcClient(transport=transport, sleep=lambda s: None)
+    client.prefetch_block_timestamps(list(blocks)[:3])
+    client.prefetch_block_timestamps(list(blocks)[3:])
+
+    attempted_batches = [p for p in transport.payloads if isinstance(p, list)]
+    assert len(attempted_batches) == 1, "should not re-probe a refused batch"
+
+
+def test_an_error_on_one_batch_entry_is_not_mistaken_for_batch_refusal():
+    # The endpoint accepted the array; one entry inside it failed. That is
+    # real data about that block, not a reason to disable batching.
+    class PartialFailureTransport:
+        def __init__(self):
+            self.payloads = []
+
+        def __call__(self, payload):
+            self.payloads.append(payload)
+            return [
+                {"id": payload[0]["id"], "result": {"timestamp": "0x5f5e100"}},
+                {"id": payload[1]["id"], "error": {"message": "unknown block"}},
+            ]
+
+    transport = PartialFailureTransport()
+    client = RpcClient(transport=transport, sleep=lambda s: None)
+    with pytest.raises(RpcError, match="unknown block"):
+        client.prefetch_block_timestamps(["0x1", "0x2"])
+    assert len(transport.payloads) == 1, "must not fall back to sequential"
+
+
+def test_prefetching_nothing_makes_no_request():
+    class Explodes:
+        def __call__(self, payload):
+            raise AssertionError("should not be called")
+
+    RpcClient(transport=Explodes(), sleep=lambda s: None).prefetch_block_timestamps([])
