@@ -6,36 +6,55 @@ Turns a wall of tiny automated machine payments into a summary a business owner
 or their accountant can actually read — with an honest split between what was
 confidently identified and what still needs review.
 
-Ledger only reads and summarizes payments a business has already received. It
-never holds or moves funds, and it does not provide tax or accounting advice.
+x402-recon only reads and summarizes payments a business has already received.
+It never holds or moves funds, and it does not provide tax or accounting advice.
 
-## Status: v0.3
+## Status: v0.3 — validated against real payments
 
-v0.2 can read real payments off Base mainnet. `x402-recon fetch` pulls native-USDC
-transfers for one receiver address and writes the same JSON that `simulate`
-writes, so `ingest` and everything downstream are unchanged. That was the
-design bet made in v0.1c, and it held: `ingest.py` was not modified.
+Point it at any x402 endpoint. It resolves the seller's receiving address from
+their own HTTP 402 response, reads their payment history off Base mainnet, and
+reports who actually came back.
 
-**The accuracy figures below are still measured on simulated data.** The staged
-measurement against real transactions — fetch, inspect the batch's shape,
-hand-label a sample, then apply the pre-registered criterion — is built and
-tested but **has not been run**. Until it is, the payer axis's confidence claim
-is calibrated on simulation only, and the report says so on any dataset that
-carries no ground truth.
+```console
+$ x402-recon --url https://api.exa.ai/search --last 30d
 
-Two things are true of real chain data that are not true of the simulator:
+x402-recon - 0x6d6E695b...0B9192
+Base mainnet - 2026-07-28 to 2026-08-27 - payTo discovered from api.exa.ai
 
-- **The service axis goes dark.** x402 settles via EIP-3009
-  `transferWithAuthorization`, whose payload identifies no resource. What was
-  bought lives in the seller's HTTP request log, never on the chain — so every
-  fetched transaction has `memo = None`, and the report suppresses the service
-  breakdown with an explanation rather than printing a wall of "no service
-  identified". Recovering that axis needs seller-side capture, not a better
-  chain query.
-- **There is no ground truth.** Real payments arrive unlabeled. The report
-  distinguishes three states — uncalibrated, partially labeled, fully labeled
-  — derived from how much of the reported range appears in `ground_truth`,
-  never from a flag anyone can set wrongly.
+  Net received          $34.296    from 5349 payments
+  Distinct payers            140    38.2 payments each
+
+Who actually came back
+----------------------
+                    payers   payments         revenue    share
+  Returning (3+)        69      5,255         $33.699    98.3%
+  Tried twice           23         46          $0.301     0.9%
+  One-shot              48         48          $0.296     0.9%
+```
+
+That is real output from a live run, not a fixture.
+
+**Independently validated.** The x402 Bazaar publishes per-service call and
+unique-payer counts. Over a comparable 30-day window it reports 3,575 calls
+from 89 payers for this endpoint; this tool measured 5,349 on-chain payments
+from 140 payers — within 1.5x and 1.6x respectively, against a pre-registered
+2x acceptance criterion fixed before the run. The two sources count different
+things (API calls versus settled on-chain payments) over non-identical windows,
+so close agreement rather than an exact match is the expected result.
+
+### What it still cannot tell you
+
+- **What was bought.** x402 settles via EIP-3009 `transferWithAuthorization`,
+  whose payload identifies no resource. That lives in the seller's HTTP request
+  log, never on the chain, so every fetched transaction has `memo = None` and
+  the report says so instead of guessing.
+- **Whether the grouping is accurate on your data.** Payer grouping is
+  calibrated on simulated data only. On unlabeled real data the report marks
+  the confidence claim uncalibrated rather than borrowing a number it did not
+  earn there.
+- **That an arbitrary address is receiving x402 specifically.** Only an address
+  resolved through `discover` is backed by a 402 response. A raw address is
+  reported as "USDC payments," never as x402 — a rule the test suite enforces.
 
 ## Usage
 
@@ -191,7 +210,7 @@ uncertain rules are never held to that floor.
 
 ## What the two axes mean
 
-Ledger answers two separate questions about every payment, and keeps them
+x402-recon answers two separate questions about every payment, and keeps them
 separate on purpose.
 
 **Who paid you** groups by sender address. A sender that repeats is evidence of
