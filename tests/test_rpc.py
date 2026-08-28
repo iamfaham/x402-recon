@@ -266,3 +266,141 @@ def test_transaction_receipt_returns_the_receipt():
 def test_transaction_receipt_returns_none_when_unknown():
     transport = FakeTransport([{"result": None}])
     assert RpcClient(transport=transport).transaction_receipt("0xdead") is None
+
+
+from x402_recon.rpc import (
+    BASE_RETRY_DELAY,
+    MAX_RETRY_ATTEMPTS,
+    TRANSIENT_HTTP_CODES,
+)
+
+
+class FlakyTransport:
+    """Fails transiently `fail_times`, then succeeds."""
+
+    def __init__(self, fail_times, status=503):
+        self.fail_times = fail_times
+        self.status = status
+        self.calls = 0
+
+    def __call__(self, payload):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise RpcError(
+                f"HTTP {self.status}: no backend is currently healthy",
+                status=self.status,
+                transient=True,
+            )
+        return {"result": "0xabc"}
+
+
+def _recording_sleep():
+    waits = []
+    return waits, waits.append
+
+
+def test_a_transient_failure_is_retried_and_then_succeeds():
+    waits, sleep = _recording_sleep()
+    transport = FlakyTransport(fail_times=2)
+    result = RpcClient(transport=transport, sleep=sleep).call("eth_blockNumber", [])
+    assert result == "0xabc"
+    assert transport.calls == 3, "should have retried twice then succeeded"
+    assert len(waits) == 2, "should have slept once per retry"
+
+
+def test_retries_back_off_exponentially():
+    waits, sleep = _recording_sleep()
+    RpcClient(transport=FlakyTransport(fail_times=3), sleep=sleep).call("m", [])
+    assert waits[1] > waits[0], f"delays should grow: {waits}"
+    assert waits[2] > waits[1], f"delays should grow: {waits}"
+
+
+def test_retries_are_jittered_so_concurrent_runs_do_not_synchronize():
+    # Two clients hitting the same failure must not sleep in lockstep - a
+    # fixed schedule turns a rate limit into a thundering herd.
+    seen = set()
+    for _ in range(8):
+        waits, sleep = _recording_sleep()
+        RpcClient(transport=FlakyTransport(fail_times=1), sleep=sleep).call("m", [])
+        seen.add(round(waits[0], 6))
+    assert len(seen) > 1, f"delays are not jittered: {seen}"
+
+
+def test_a_transient_failure_eventually_gives_up():
+    waits, sleep = _recording_sleep()
+    transport = FlakyTransport(fail_times=99)
+    with pytest.raises(RpcError, match="503"):
+        RpcClient(transport=transport, sleep=sleep).call("m", [])
+    assert transport.calls == MAX_RETRY_ATTEMPTS
+
+
+def test_a_non_transient_error_is_not_retried_at_all():
+    class HardFailure:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, payload):
+            self.calls += 1
+            raise RpcError("HTTP 400: malformed request", status=400)
+
+    waits, sleep = _recording_sleep()
+    transport = HardFailure()
+    with pytest.raises(RpcError, match="400"):
+        RpcClient(transport=transport, sleep=sleep).call("m", [])
+    assert transport.calls == 1, "a 400 must fail immediately"
+    assert waits == [], "must not sleep on a non-transient failure"
+
+
+def test_every_retry_announces_itself(capsys):
+    # Nothing retries silently: a slow run must be explicable.
+    waits, sleep = _recording_sleep()
+    RpcClient(transport=FlakyTransport(fail_times=1), sleep=sleep).call("m", [])
+    out = capsys.readouterr().out
+    assert "retry" in out.lower()
+    assert "503" in out
+
+
+def test_the_transient_code_set_covers_the_ones_seen_in_practice():
+    # 503 is what mainnet.base.org actually returned three times in a row
+    # during the first real run; 429 is the rate-limit case.
+    for code in (429, 502, 503, 504):
+        assert code in TRANSIENT_HTTP_CODES
+    for code in (400, 401, 404, 413):
+        assert code not in TRANSIENT_HTTP_CODES
+
+
+def test_a_transient_failure_never_narrows_the_block_span():
+    # THE RULE. Narrowing in response to a rate limit makes rate limiting
+    # worse: a narrower span means more requests.
+    class TransientThenFine:
+        def __init__(self):
+            self.spans = []
+            self.calls = 0
+
+        def __call__(self, payload):
+            self.calls += 1
+            params = payload["params"][0]
+            span = int(params["toBlock"], 16) - int(params["fromBlock"], 16) + 1
+            self.spans.append(span)
+            if self.calls == 1:
+                raise RpcError("HTTP 503: unavailable", status=503, transient=True)
+            return {"result": []}
+
+    waits, sleep = _recording_sleep()
+    transport = TransientThenFine()
+    RpcClient(transport=transport, sleep=sleep).get_logs(
+        address="0xtoken", topics=["0xtopic"], from_block=0, to_block=500
+    )
+    assert transport.spans[0] == transport.spans[1], (
+        f"span changed after a transient failure: {transport.spans}"
+    )
+
+
+def test_a_range_complaint_still_narrows_and_does_not_sleep():
+    waits, sleep = _recording_sleep()
+    transport = NarrowingTransport(limit=10_000)
+    RpcClient(transport=transport, sleep=sleep).get_logs(
+        address="0xtoken", topics=["0xtopic"], from_block=0, to_block=20_000
+    )
+    assert waits == [], "narrowing must not sleep"
+    assert min(transport.spans) <= 10_000

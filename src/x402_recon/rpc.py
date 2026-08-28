@@ -6,6 +6,8 @@ fetched batch replayable from disk.
 """
 
 import json
+import random
+import time
 import urllib.request
 
 from x402_recon.chain import block_timestamp_to_iso
@@ -30,9 +32,29 @@ _TIMEOUT_SECONDS = 30
 # this header get 403 with none and 200 with any named one.
 _USER_AGENT = "x402-recon (+https://github.com/iamfaham/x402-recon)"
 
+# Codes that mean "try again shortly", not "your request was wrong".
+# 503 is what mainnet.base.org actually returned three times consecutively
+# during the first real run against it.
+TRANSIENT_HTTP_CODES = frozenset({429, 502, 503, 504})
+
+MAX_RETRY_ATTEMPTS = 4
+MAX_RETRY_SECONDS = 30.0
+BASE_RETRY_DELAY = 0.5
+
 
 class RpcError(RuntimeError):
-    """The endpoint returned an error, or a response we cannot use."""
+    """The endpoint returned an error, or a response we cannot use.
+
+    `transient` distinguishes "try again shortly" from "your request was
+    wrong". The two need opposite responses, and applying the wrong one makes
+    things worse rather than merely failing to help: narrowing the block span
+    in response to a rate limit produces MORE requests.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None, transient: bool = False):
+        super().__init__(message)
+        self.status = status
+        self.transient = transient
 
 
 def _urllib_transport(url: str):
@@ -57,11 +79,21 @@ def _urllib_transport(url: str):
                 body = json.loads(exc.read().decode("utf-8"))
                 if isinstance(body, dict) and "error" in body:
                     raise RpcError(
-                        f"HTTP {exc.code}: {body['error'].get('message', body['error'])}"
+                        f"HTTP {exc.code}: {body['error'].get('message', body['error'])}",
+                        status=exc.code,
+                        transient=exc.code in TRANSIENT_HTTP_CODES,
                     ) from exc
             except (ValueError, AttributeError):
                 pass
-            raise RpcError(f"HTTP {exc.code}: {exc.reason}") from exc
+            raise RpcError(
+                f"HTTP {exc.code}: {exc.reason}",
+                status=exc.code,
+                transient=exc.code in TRANSIENT_HTTP_CODES,
+            ) from exc
+        except urllib.error.URLError as exc:
+            # A timeout or a dropped connection - retryable, and not the
+            # endpoint telling us anything about our request.
+            raise RpcError(f"connection failed: {exc.reason}", transient=True) from exc
 
     return send
 
@@ -69,11 +101,40 @@ def _urllib_transport(url: str):
 class RpcClient:
     """Minimal JSON-RPC client with an injectable transport."""
 
-    def __init__(self, url: str = DEFAULT_BASE_RPC_URL, *, transport=None):
+    def __init__(self, url: str = DEFAULT_BASE_RPC_URL, *, transport=None, sleep=time.sleep):
         self._transport = transport or _urllib_transport(url)
+        self._sleep = sleep
         self._request_id = 0
         self._block_timestamps: dict[str, str] = {}
         self._span = INITIAL_BLOCK_SPAN
+
+    def _send_with_retry(self, payload):
+        """Send, retrying transient failures with jittered exponential backoff.
+
+        Nothing retries silently: a slow run must be explicable rather than
+        mysterious, which is the same guarantee the reject list gives for data.
+        """
+        attempt = 0
+        slept = 0.0
+        while True:
+            try:
+                return self._transport(payload)
+            except RpcError as exc:
+                attempt += 1
+                if (
+                    not exc.transient
+                    or attempt >= MAX_RETRY_ATTEMPTS
+                    or slept >= MAX_RETRY_SECONDS
+                ):
+                    raise
+                delay = BASE_RETRY_DELAY * (2 ** (attempt - 1))
+                delay *= random.uniform(0.5, 1.5)  # jitter: avoid a thundering herd
+                delay = min(delay, MAX_RETRY_SECONDS - slept)
+                print(
+                    f"  retry {attempt}/{MAX_RETRY_ATTEMPTS} in {delay:.1f}s: {exc}"
+                )
+                self._sleep(delay)
+                slept += delay
 
     def call(self, method: str, params: list) -> object:
         self._request_id += 1
@@ -83,7 +144,7 @@ class RpcClient:
             "method": method,
             "params": params,
         }
-        response = self._transport(payload)
+        response = self._send_with_retry(payload)
         if "error" in response:
             raise RpcError(f"{method} failed: {response['error'].get('message')}")
         if "result" not in response:
