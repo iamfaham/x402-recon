@@ -56,10 +56,18 @@ class RpcError(RuntimeError):
     in response to a rate limit produces MORE requests.
     """
 
-    def __init__(self, message: str, *, status: int | None = None, transient: bool = False):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        transient: bool = False,
+        batch_refused: bool = False,
+    ):
         super().__init__(message)
         self.status = status
         self.transient = transient
+        self.batch_refused = batch_refused
 
 
 def _urllib_transport(url: str):
@@ -99,6 +107,14 @@ def _urllib_transport(url: str):
             # A timeout or a dropped connection - retryable, and not the
             # endpoint telling us anything about our request.
             raise RpcError(f"connection failed: {exc.reason}", transient=True) from exc
+        except TimeoutError as exc:
+            # A timeout during response.read() (the body read, after connect)
+            # raises a bare TimeoutError - an OSError subclass, but NOT a
+            # urllib.error.URLError, and neither subclasses the other. Left
+            # uncaught, this escapes as an unclassified exception instead of
+            # the documented retry-eligible RpcError. TimeoutError has no
+            # `.reason` attribute, unlike URLError, so use str(exc) here.
+            raise RpcError(f"connection failed: {exc}", transient=True) from exc
 
     return send
 
@@ -181,7 +197,11 @@ class RpcClient:
                     ],
                 )
             except RpcError as exc:
-                if self._span > MIN_BLOCK_SPAN and _looks_like_range_complaint(exc):
+                if (
+                    not exc.transient
+                    and self._span > MIN_BLOCK_SPAN
+                    and _looks_like_range_complaint(exc)
+                ):
                     self._span = max(MIN_BLOCK_SPAN, _narrow(self._span))
                     continue
                 raise
@@ -225,11 +245,26 @@ class RpcClient:
                 }
             )
 
-        response = self._send_with_retry(payload)
+        try:
+            response = self._send_with_retry(payload)
+        except RpcError as exc:
+            # A non-transient failure raised while *sending* the batch itself
+            # (a definite HTTP-level rejection, e.g. 400) means this
+            # endpoint's shape is unsupported - mark it structurally so
+            # callers can distinguish it from an error about one entry
+            # inside an accepted batch, without text-matching. A transient
+            # failure (429/502/503/504/timeout) already went through the
+            # normal retry path above; if it still reaches here, retries were
+            # exhausted, and it must propagate as a real failure, not a
+            # permanent "batching not supported" verdict.
+            if not exc.transient:
+                exc.batch_refused = True
+            raise
         if not isinstance(response, list):
             raise RpcError(
                 f"{method} batch got a non-array response; this endpoint may "
-                f"not support batching: {response!r}"
+                f"not support batching: {response!r}",
+                batch_refused=True,
             )
 
         by_id = {entry.get("id"): entry for entry in response}
@@ -268,11 +303,15 @@ class RpcClient:
                         "eth_getBlockByNumber", [[block, False] for block in chunk]
                     )
                 except RpcError as exc:
-                    if not _looks_like_batch_refusal(exc):
+                    if not (exc.batch_refused or _looks_like_batch_refusal(exc)):
                         raise
                     # The endpoint will not take arrays. Remember it, and
                     # finish this prefetch sequentially below.
                     self._batch_supported = False
+                    print(
+                        f"  batching not supported by this endpoint, falling "
+                        f"back to sequential calls: {exc}"
+                    )
                     break
                 for block, data in zip(chunk, blocks):
                     if not data or "timestamp" not in data:
@@ -307,6 +346,13 @@ def _narrow(current_span: int) -> int:
 
 def _looks_like_batch_refusal(error: Exception) -> bool:
     """Whether the endpoint rejected the batch SHAPE rather than its contents.
+
+    This is now a defensive fallback, not the primary signal: the primary
+    classification is structural, via `RpcError.batch_refused`, which is set
+    at the two raise sites in `call_batch` that actually know the failure
+    happened while sending/parsing the batch itself rather than about one
+    entry inside it. This text heuristic only catches errors that predate
+    that flag (or come from elsewhere) and would otherwise be missed.
 
     An error about one request inside a batch is real data about that request.
     An error saying arrays are unsupported means fall back to sequential.

@@ -64,6 +64,98 @@ def test_the_default_transport_turns_an_http_error_into_an_rpc_error(monkeypatch
         rpc_module._urllib_transport("https://example.test")({"a": 1})
 
 
+def test_a_real_http_error_503_translates_to_a_transient_rpc_error(monkeypatch):
+    # Exercise the actual exception-translation code in _urllib_transport,
+    # not a hand-constructed RpcError - a real urllib.error.HTTPError must
+    # come out the other side as transient=True for a 503.
+    import urllib.error
+
+    from x402_recon import rpc as rpc_module
+
+    def fake_urlopen(request, timeout):
+        raise urllib.error.HTTPError(
+            "https://example.test", 503, "Service Unavailable", {}, None
+        )
+
+    monkeypatch.setattr(rpc_module.urllib.request, "urlopen", fake_urlopen)
+
+    try:
+        rpc_module._urllib_transport("https://example.test")({"a": 1})
+        assert False, "expected RpcError"
+    except RpcError as exc:
+        assert exc.transient is True
+        assert exc.status == 503
+
+
+def test_a_real_http_error_400_translates_to_a_non_transient_rpc_error(monkeypatch):
+    import urllib.error
+
+    from x402_recon import rpc as rpc_module
+
+    def fake_urlopen(request, timeout):
+        raise urllib.error.HTTPError(
+            "https://example.test", 400, "Bad Request", {}, None
+        )
+
+    monkeypatch.setattr(rpc_module.urllib.request, "urlopen", fake_urlopen)
+
+    try:
+        rpc_module._urllib_transport("https://example.test")({"a": 1})
+        assert False, "expected RpcError"
+    except RpcError as exc:
+        assert exc.transient is False
+        assert exc.status == 400
+
+
+def test_a_real_url_error_translates_to_a_transient_rpc_error(monkeypatch):
+    # A connection failure / connect-phase timeout arrives as URLError, not
+    # HTTPError - must still be classified transient so it gets retried.
+    import urllib.error
+
+    from x402_recon import rpc as rpc_module
+
+    def fake_urlopen(request, timeout):
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(rpc_module.urllib.request, "urlopen", fake_urlopen)
+
+    try:
+        rpc_module._urllib_transport("https://example.test")({"a": 1})
+        assert False, "expected RpcError"
+    except RpcError as exc:
+        assert exc.transient is True
+
+
+def test_a_body_read_timeout_translates_to_a_transient_rpc_error_not_a_crash(monkeypatch):
+    # response.read() happens inside the try block but a bare TimeoutError
+    # (an OSError subclass, NOT a urllib.error.URLError - neither subclasses
+    # the other) during that read is not caught by the existing except
+    # clauses, so it escapes as an unclassified exception instead of the
+    # documented retry-eligible RpcError.
+    from x402_recon import rpc as rpc_module
+
+    class ExplodingResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            raise TimeoutError("timed out reading response body")
+
+    def fake_urlopen(request, timeout):
+        return ExplodingResponse()
+
+    monkeypatch.setattr(rpc_module.urllib.request, "urlopen", fake_urlopen)
+
+    try:
+        rpc_module._urllib_transport("https://example.test")({"a": 1})
+        assert False, "expected RpcError"
+    except RpcError as exc:
+        assert exc.transient is True
+
+
 def test_call_returns_the_result_field():
     transport = FakeTransport([{"jsonrpc": "2.0", "id": 1, "result": "0xabc"}])
     assert RpcClient(transport=transport).call("eth_blockNumber", []) == "0xabc"
@@ -309,10 +401,19 @@ def test_a_transient_failure_is_retried_and_then_succeeds():
 
 
 def test_retries_back_off_exponentially():
+    # Assert each delay falls within its deterministic expected band rather
+    # than comparing consecutive jittered delays to each other - the jitter
+    # ranges for adjacent attempts overlap (attempt 1: [0.25, 0.75], attempt
+    # 2: [0.5, 1.5]), so a waits[n] > waits[n-1] comparison flakes about 6%
+    # of the time per comparison even when the code is correct.
     waits, sleep = _recording_sleep()
     RpcClient(transport=FlakyTransport(fail_times=3), sleep=sleep).call("m", [])
-    assert waits[1] > waits[0], f"delays should grow: {waits}"
-    assert waits[2] > waits[1], f"delays should grow: {waits}"
+    assert len(waits) == 3, "should have slept once per retry"
+    for n, observed in enumerate(waits, start=1):
+        expected = BASE_RETRY_DELAY * (2 ** (n - 1))
+        assert expected * 0.5 <= observed <= expected * 1.5, (
+            f"attempt {n}: {observed} outside expected band around {expected}"
+        )
 
 
 def test_retries_are_jittered_so_concurrent_runs_do_not_synchronize():
@@ -394,6 +495,38 @@ def test_a_transient_failure_never_narrows_the_block_span():
     assert transport.spans[0] == transport.spans[1], (
         f"span changed after a transient failure: {transport.spans}"
     )
+
+
+def test_a_transient_failure_worded_like_a_range_complaint_still_retries_not_narrows():
+    # A 503 whose message happens to contain "results" or "range" must still
+    # be treated as transient - retried at the same span until retries are
+    # exhausted, then re-raised - never narrowed just because the wording
+    # happens to match a range complaint. The `transient` flag must win over
+    # any text heuristic.
+    class AlwaysTransientButRangeWorded:
+        def __init__(self):
+            self.spans = []
+            self.calls = 0
+
+        def __call__(self, payload):
+            self.calls += 1
+            params = payload["params"][0]
+            span = int(params["toBlock"], 16) - int(params["fromBlock"], 16) + 1
+            self.spans.append(span)
+            raise RpcError(
+                "503: upstream returned no results", status=503, transient=True
+            )
+
+    waits, sleep = _recording_sleep()
+    transport = AlwaysTransientButRangeWorded()
+    with pytest.raises(RpcError, match="results"):
+        RpcClient(transport=transport, sleep=sleep).get_logs(
+            address="0xtoken", topics=["0xtopic"], from_block=0, to_block=200_000
+        )
+    assert len(set(transport.spans)) == 1, (
+        f"span changed after a transient (range-worded) failure: {transport.spans}"
+    )
+    assert len(waits) == MAX_RETRY_ATTEMPTS - 1, "should have retried, not narrowed"
 
 
 def test_a_range_complaint_still_narrows_and_does_not_sleep():
@@ -539,6 +672,73 @@ def test_an_error_on_one_batch_entry_is_not_mistaken_for_batch_refusal():
     with pytest.raises(RpcError, match="unknown block"):
         client.prefetch_block_timestamps(["0x1", "0x2"])
     assert len(transport.payloads) == 1, "must not fall back to sequential"
+
+
+def test_a_plain_worded_batch_refusal_still_falls_back_to_sequential():
+    # Regression test for 2a: _looks_like_batch_refusal substring-matches
+    # "batch" or "non-array response", so an ordinary refusal that mentions
+    # neither (a plain HTTP 400) used to be re-raised, aborting the entire
+    # run instead of falling back. Classification must be structural (the
+    # `batch_refused` flag set from where the error originates), not textual.
+    blocks = {hex(n): hex(1_700_000_000 + n) for n in range(3)}
+
+    class PlainRefusalTransport(BatchTransport):
+        def __call__(self, payload):
+            if isinstance(payload, list):
+                self.payloads.append(payload)
+                raise RpcError("HTTP 400: Bad Request", status=400, transient=False)
+            return super().__call__(payload)
+
+    transport = PlainRefusalTransport(blocks)
+    client = RpcClient(transport=transport, sleep=lambda s: None)
+    client.prefetch_block_timestamps(list(blocks))
+
+    for block in blocks:
+        assert client.block_timestamp(block).endswith("Z")
+    assert any(not isinstance(p, dict) for p in transport.payloads), "tried a batch"
+
+
+def test_the_batch_fallback_announces_itself(capsys):
+    # Regression test for 2b: the fallback branch printed nothing, breaking
+    # the "nothing retries or falls back silently" guarantee that the retry
+    # path already honors.
+    blocks = {hex(n): hex(1_700_000_000 + n) for n in range(3)}
+
+    class PlainRefusalTransport(BatchTransport):
+        def __call__(self, payload):
+            if isinstance(payload, list):
+                self.payloads.append(payload)
+                raise RpcError("HTTP 400: Bad Request", status=400, transient=False)
+            return super().__call__(payload)
+
+    transport = PlainRefusalTransport(blocks)
+    client = RpcClient(transport=transport, sleep=lambda s: None)
+    client.prefetch_block_timestamps(list(blocks))
+
+    out = capsys.readouterr().out
+    assert "falling back to sequential" in out.lower()
+
+
+def test_a_transient_batch_failure_that_exhausts_retries_raises_not_falls_back():
+    # A transient failure (429/502/503/504/timeout) must propagate through
+    # the normal retry path and, if it exhausts retries, raise as a real
+    # failure of that prefetch call - not silently downgrade the client to
+    # sequential mode for the rest of the run.
+    class AlwaysTransientBatchTransport:
+        def __init__(self):
+            self.payloads = []
+
+        def __call__(self, payload):
+            self.payloads.append(payload)
+            raise RpcError("HTTP 503: unavailable", status=503, transient=True)
+
+    transport = AlwaysTransientBatchTransport()
+    client = RpcClient(transport=transport, sleep=lambda s: None)
+    with pytest.raises(RpcError, match="503"):
+        client.prefetch_block_timestamps(["0x1", "0x2"])
+    assert client._batch_supported is True, (
+        "a transient failure must not permanently disable batching"
+    )
 
 
 def test_prefetching_nothing_makes_no_request():
