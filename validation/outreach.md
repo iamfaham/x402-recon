@@ -180,7 +180,7 @@ what I learn back.
 
 ## If they ask what you've built
 
-[`demo/customers-demo.md`](../demo/customers-demo.md) renders both profiles side by side —
+`demo/customers-demo.md` (local, untracked) renders both profiles side by side —
 a real service and a probe-shaped one. **Be upfront that the payment amounts and the
 within-service repeat split are modelled**; only the call and payer counts are real. That
 honesty is the point: the exact split is precisely the number they could tell you in one

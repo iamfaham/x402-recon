@@ -16,3 +16,7 @@ wheels/
 # Ledger working artifacts
 *.db
 sample/
+
+# Internal dev notes and planning history — not for the public repo
+docs/
+demo/

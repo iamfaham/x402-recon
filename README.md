@@ -200,7 +200,7 @@ defensible `N=12` gives ≈0.945 and fails. The margin (1.2 points) is thin
 enough that this should be read as a real pass, not a settled one.
 
 Full per-rule detail for both axes, including the complete `evaluate` output,
-is in [`docs/sample-report.md`](docs/sample-report.md).
+is available by running `evaluate` yourself against your own data.
 
 Precision asks: of the payments grouped together, how many belonged together.
 Recall asks: of the payments from one payer (or one service), how many were
@@ -266,6 +266,6 @@ uv run pytest
 
 ## Docs
 
-- Design spec: `docs/superpowers/specs/2026-08-18-ledger-v0-design.md`
-- Implementation plan: `docs/superpowers/plans/2026-08-18-ledger-v0.md`
 - Validation outreach: `validation/outreach.md`
+- Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Security: [`SECURITY.md`](SECURITY.md)

@@ -43,5 +43,4 @@ Behavioural changes need a test that fails without them. The suite is fast;
 there is no reason to skip it.
 
 If you are changing something the tool measures about itself, say what
-changed in the measurement and why — the docs under `docs/` record past
-decisions in that form, including the ones that turned out wrong.
+changed in the measurement and why, in the PR description or commit message.
