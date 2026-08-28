@@ -39,6 +39,13 @@ _KNOWN_COMMANDS = {
     "customers", "evaluate", "fetch", "discover",
 }
 
+# Machinery for validating the tool's own accuracy rather than for reporting
+# on payments. Hidden from the default help via argparse.SUPPRESS, which
+# leaves them fully working - nothing that exists today breaks - and listed
+# by `--advanced`, because a command that cannot be found is worse than one
+# that is merely verbose.
+ADVANCED_COMMANDS = frozenset({"simulate", "shape", "label", "evaluate"})
+
 
 def _valid_date(value: str) -> str:
     """argparse `type=` validator for --from/--to.
@@ -73,6 +80,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "This tool reads and summarizes payments you have already received. "
             "It never holds or moves funds, and it is not tax or accounting advice."
         ),
+        epilog="Run --advanced to list research and validation commands.",
+    )
+    parser.add_argument(
+        "--advanced",
+        action="store_true",
+        help="list the research and validation commands",
     )
     parser.add_argument("--db", default=None, help="SQLite database path")
     parser.add_argument("address", nargs="?", help="the receiving address to report on")
@@ -89,9 +102,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-sample", action="store_true", help="skip the x402 settlement sample"
     )
-    sub = parser.add_subparsers(dest="command", required=False)
+    # metavar="command" keeps the usage line from spelling out every
+    # subcommand name (including the hidden ones) as {simulate,ingest,...}.
+    sub = parser.add_subparsers(dest="command", required=False, metavar="command")
 
-    simulate = sub.add_parser("simulate", help="generate a synthetic transaction batch")
+    simulate = sub.add_parser("simulate", help=argparse.SUPPRESS)
     simulate.add_argument("--out", required=True, help="directory to write JSON into")
     simulate.add_argument("--count", type=int, default=120)
     simulate.add_argument("--seed", type=int, default=42)
@@ -101,9 +116,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("categorize", help="run the categorization cascade")
 
-    sub.add_parser("shape", help="describe a batch's structure, with no scores")
+    sub.add_parser("shape", help=argparse.SUPPRESS)
 
-    label = sub.add_parser("label", help="emit a worksheet for hand-labeling payers")
+    label = sub.add_parser("label", help=argparse.SUPPRESS)
     label.add_argument("--out", required=True, help="path to write the worksheet JSON")
 
     report = sub.add_parser("report", help="summarize a date range")
@@ -125,7 +140,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--to", dest="end", required=True, type=_valid_date, help="YYYY-MM-DD"
     )
 
-    sub.add_parser("evaluate", help="score categorization against ground truth")
+    sub.add_parser("evaluate", help=argparse.SUPPRESS)
 
     fetch = sub.add_parser("fetch", help="fetch real payments from the chain")
     fetch.add_argument("--receiver", required=True, help="the address that was paid")
@@ -142,6 +157,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "discover", help="read the receiving address out of an x402 endpoint's 402 response"
     )
     discover_cmd.add_argument("url", help="an x402 endpoint")
+
+    # help=argparse.SUPPRESS above is meant to drop a subparser from the
+    # choices listing outright, but on this argparse (CPython 3.13) the
+    # pseudo-action is still appended and its help renders as the literal
+    # string "==SUPPRESS==" instead of being omitted. Filter those entries
+    # out explicitly so the four advanced commands are actually hidden,
+    # regardless of that rendering quirk.
+    sub._choices_actions = [
+        action for action in sub._choices_actions if action.help != argparse.SUPPRESS
+    ]
 
     return parser
 
@@ -280,6 +305,13 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if address_arg is not None:
         args.address = address_arg
+
+    if args.advanced:
+        print("Research and validation commands:\n")
+        for name in sorted(ADVANCED_COMMANDS):
+            print(f"  {name}")
+        print("\nRun `x402-recon <command> --help` for details on any of them.")
+        return 0
 
     if args.command == "simulate":
         batch = generate_batch(count=args.count, seed=args.seed)

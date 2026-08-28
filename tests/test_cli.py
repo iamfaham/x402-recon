@@ -407,3 +407,42 @@ def test_the_no_cache_database_file_is_deleted_after_use(tmp_path, monkeypatch):
 
     main(["0x" + "99" * 20, "--no-cache"])
     assert not made_path["path"].exists()
+
+
+from x402_recon.cli import ADVANCED_COMMANDS
+
+
+def test_research_commands_are_absent_from_the_default_help(capsys):
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    out = capsys.readouterr().out
+    for name in ADVANCED_COMMANDS:
+        assert name not in out, f"{name} should be hidden from default help"
+
+
+def test_everyday_commands_are_still_listed(capsys):
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    out = capsys.readouterr().out
+    for name in ("discover", "report", "customers", "fetch"):
+        assert name in out
+
+
+def test_the_default_help_points_at_advanced(capsys):
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    assert "--advanced" in capsys.readouterr().out
+
+
+def test_advanced_lists_the_hidden_commands(capsys):
+    code = main(["--advanced"])
+    out = capsys.readouterr().out
+    for name in ADVANCED_COMMANDS:
+        assert name in out
+    assert code == 0
+
+
+def test_a_hidden_command_still_works_exactly_as_before(tmp_path, capsys):
+    # Hiding must not break anyone following existing documentation.
+    assert main(["simulate", "--out", str(tmp_path), "--count", "10"]) == 0
+    assert (tmp_path / "transactions.json").exists()
