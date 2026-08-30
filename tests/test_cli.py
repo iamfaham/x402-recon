@@ -309,6 +309,49 @@ def test_a_bare_address_runs_the_overview(tmp_path, capsys, monkeypatch):
     assert captured["address"] == "0x" + "99" * 20
 
 
+def _stub_overview_with_rejects(monkeypatch, tmp_path, rejects):
+    """Build a real Overview (over an empty database) carrying the given rejects,
+    and wire it into main() the same way the other overview tests do: patch
+    run_overview and the block-range lookup, and hand out a fake RPC client."""
+    from x402_recon.db import connect, init_schema
+    from x402_recon.overview import build_overview
+
+    db_path = tmp_path / "empty-for-rejects.db"
+    conn = connect(db_path)
+    init_schema(conn)
+    overview = build_overview(
+        conn,
+        "0x" + "ab" * 20,
+        "2026-07-01",
+        "2026-07-31",
+        rejects=rejects,
+    )
+
+    monkeypatch.setattr("x402_recon.cli.run_overview", lambda **k: overview)
+    monkeypatch.setattr("x402_recon.cli.days_ago_range", lambda c, d: (1, 2))
+    monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
+
+
+def test_the_overview_prints_reject_detail_not_just_a_count(monkeypatch, tmp_path, capsys):
+    _stub_overview_with_rejects(
+        monkeypatch, tmp_path, rejects=[("0xabc", "no blockNumber")]
+    )
+    main(["0x" + "ab" * 20, "--last", "30d", "--no-cache"])
+    out = capsys.readouterr().out
+    assert "1 row(s) were skipped" in out
+    assert "0xabc" in out, "the hash must be shown, not just counted"
+    assert "no blockNumber" in out, "the reason must be shown"
+
+
+def test_no_cache_writes_no_reject_file(monkeypatch, tmp_path, capsys):
+    # --no-cache means "write nothing to my machine", and that beats completeness.
+    _stub_overview_with_rejects(monkeypatch, tmp_path, rejects=[("0xabc", "bad")])
+    main(["0x" + "ab" * 20, "--last", "30d", "--no-cache"])
+    out = capsys.readouterr().out
+    assert "0xabc" in out, "inline detail is still shown"
+    assert "rejects-" not in out, "no file path should be printed"
+
+
 def test_from_without_to_is_an_error(capsys, monkeypatch):
     monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
     code = main(["0x" + "99" * 20, "--from", "2026-07-01"])

@@ -25,6 +25,7 @@ from x402_recon.ingest import IngestError, format_ingest_summary, ingest_from_di
 from x402_recon.labeling import build_worksheet, write_worksheet
 from x402_recon.models import AXIS_COUNT
 from x402_recon.overview import render_overview
+from x402_recon.rejects import render_rejects, write_rejects
 from x402_recon.report import build_report, render_summary, write_csv
 from x402_recon.rpc import DEFAULT_BASE_RPC_URL, RpcClient, RpcError
 from x402_recon.run import run_overview
@@ -281,6 +282,15 @@ def _run_overview_command(args: argparse.Namespace) -> int:
         rejects = getattr(overview, "rejects", None)
         if rejects:
             print(f"\n{len(rejects)} row(s) were skipped and excluded from these totals.")
+            print(render_rejects(rejects))
+            if not args.no_cache:
+                # --no-cache means "write nothing to my machine". Honouring
+                # that beats completeness; the inline detail above still shows
+                # what was dropped.
+                rejects_path = write_rejects(
+                    rejects, cache_dir() / f"rejects-{address}.json"
+                )
+                print(f"\nFull list written to {rejects_path}")
         return 0
     finally:
         if args.no_cache:
