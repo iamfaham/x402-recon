@@ -299,7 +299,7 @@ def test_a_bare_address_runs_the_overview(tmp_path, capsys, monkeypatch):
         return Fake()
 
     monkeypatch.setattr("x402_recon.cli.run_overview", fake_run)
-    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o: "OVERVIEW")
+    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o, **k: "OVERVIEW")
     monkeypatch.setattr("x402_recon.cli.days_ago_range", lambda c, d: (1, 2))
     monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
 
@@ -419,7 +419,7 @@ def test_work_dir_is_removed_after_a_successful_run(tmp_path, monkeypatch):
         rejects = []
 
     monkeypatch.setattr("x402_recon.cli.run_overview", lambda **k: Fake())
-    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o: "OVERVIEW")
+    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o, **k: "OVERVIEW")
 
     main(["0x" + "99" * 20, "--no-cache"])
     assert not created["path"].exists()
@@ -446,7 +446,7 @@ def test_the_no_cache_database_file_is_deleted_after_use(tmp_path, monkeypatch):
         rejects = []
 
     monkeypatch.setattr("x402_recon.cli.run_overview", lambda **k: Fake())
-    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o: "OVERVIEW")
+    monkeypatch.setattr("x402_recon.cli.render_overview", lambda o, **k: "OVERVIEW")
 
     main(["0x" + "99" * 20, "--no-cache"])
     assert not made_path["path"].exists()

@@ -24,12 +24,9 @@ from dataclasses import dataclass, field
 
 from x402_recon.customers import _BAND_LABELS, CustomerReport, build_customer_report
 from x402_recon.money import format_usdc, format_usdc_rounded, rounds_exactly
+from x402_recon.privacy import shorten_address
 from x402_recon.report import ReportData, build_report, calibration_state
 from x402_recon.verify import SampleResult, render_sample
-
-
-def _shorten(address: str) -> str:
-    return address[:10] + "…" + address[-6:]
 
 
 @dataclass(frozen=True)
@@ -87,12 +84,16 @@ _CALIBRATION_NOTES = {
 }
 
 
-def render_overview(overview: Overview) -> str:
-    """Render the combined money-and-customers overview."""
+def render_overview(overview: Overview, *, redact: bool = True) -> str:
+    """Render the combined money-and-customers overview.
+
+    Addresses are shortened by default; `redact=False` shows them in full.
+    """
     report = overview.report
     customers = overview.customers
 
-    header = f"x402-recon · {_shorten(overview.address)}"
+    shown_address = shorten_address(overview.address) if redact else overview.address
+    header = f"x402-recon · {shown_address}"
     lines = [
         header,
         f"Base mainnet · {overview.start} to {overview.end} · "

@@ -188,3 +188,18 @@ def test_the_overview_omits_the_exact_total_when_rounding_lost_nothing(conn):
     out = render_overview(build_overview(conn, ADDRESS, "2026-08-01", "2026-08-31"))
     assert "$5.00" in out
     assert "exact" not in out.lower(), "a clean total needs no footnote"
+
+
+def test_the_overview_redacts_the_address_by_default(conn):
+    _seed(conn, [("0xa", "0xcust0", 1_000_000, "2026-08-02T00:00:00Z")])
+    out = render_overview(build_overview(conn, ADDRESS, "2026-08-01", "2026-08-31"))
+    assert ADDRESS not in out
+    assert "…" in out
+
+
+def test_full_addresses_can_be_restored(conn):
+    _seed(conn, [("0xa", "0xcust0", 1_000_000, "2026-08-02T00:00:00Z")])
+    out = render_overview(
+        build_overview(conn, ADDRESS, "2026-08-01", "2026-08-31"), redact=False
+    )
+    assert ADDRESS in out

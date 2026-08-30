@@ -103,6 +103,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-sample", action="store_true", help="skip the x402 settlement sample"
     )
+    parser.add_argument(
+        "--full-addresses",
+        action="store_true",
+        help="show addresses in full instead of shortened",
+    )
     # metavar="command" keeps the usage line from spelling out every
     # subcommand name (including the hidden ones) as {simulate,ingest,...}.
     sub = parser.add_subparsers(dest="command", required=False, metavar="command")
@@ -278,7 +283,7 @@ def _run_overview_command(args: argparse.Namespace) -> int:
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
 
-        print(render_overview(overview))
+        print(render_overview(overview, redact=not args.full_addresses))
         rejects = getattr(overview, "rejects", None)
         if rejects:
             print(f"\n{len(rejects)} row(s) were skipped and excluded from these totals.")
