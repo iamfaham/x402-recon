@@ -5,7 +5,7 @@ used: sub-cent payments summed thousands of times drift with floating point, and
 drift in a financial total is the exact failure this tool exists to prevent.
 """
 
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 MICRO_PER_USDC = 1_000_000
 _MAX_DECIMAL_PLACES = 6
@@ -53,3 +53,38 @@ def format_usdc(micro: int) -> str:
     if len(fraction) < 2:
         fraction = fraction.ljust(2, "0")
     return f"{sign}${whole}.{fraction}"
+
+
+# Two decimal places is one cent, which is 10_000 micro-USDC.
+_MICRO_PER_CENT = 10_000
+
+
+def format_usdc_rounded(micro: int) -> str:
+    """Format micro-USDC for display as exactly two decimal places.
+
+    For aggregates only. A total of thousands of sub-cent payments carries six
+    genuine decimal places, which is exact and unreadable; this renders the
+    figure a business owner actually wants. Individual amounts keep
+    `format_usdc`, which never rounds away a micropayment.
+
+    ROUND_HALF_UP is chosen because it matches what a reader expects of
+    $0.005 -> $0.01. The mode barely matters here since callers also show the
+    exact figure whenever rounding lost anything, but it is fixed and stated
+    rather than left to a default.
+
+    This is display only. No stored or summed value is ever rounded.
+    """
+    sign = "-" if micro < 0 else ""
+    cents = abs(micro_to_decimal(micro)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{sign}${cents:,.2f}"
+
+
+def rounds_exactly(micro: int) -> bool:
+    """Whether rounding this amount to cents loses nothing.
+
+    Callers use this to decide whether to print the exact figure alongside a
+    rounded one: a total of $437.910000 needs no such footnote, while
+    $437.914959 does. Keeping the footnote conditional is what makes its
+    presence meaningful.
+    """
+    return micro % _MICRO_PER_CENT == 0

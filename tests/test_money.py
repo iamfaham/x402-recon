@@ -2,7 +2,14 @@ from decimal import Decimal
 
 import pytest
 
-from x402_recon.money import MICRO_PER_USDC, format_usdc, micro_to_decimal, usdc_to_micro
+from x402_recon.money import (
+    MICRO_PER_USDC,
+    format_usdc,
+    format_usdc_rounded,
+    micro_to_decimal,
+    rounds_exactly,
+    usdc_to_micro,
+)
 
 
 def test_micro_per_usdc_is_six_decimals():
@@ -80,3 +87,54 @@ def test_format_usdc_renders_negative_with_leading_sign():
 
 def test_format_usdc_renders_negative_sub_cent():
     assert format_usdc(-1234) == "-$0.001234"
+
+
+def test_format_usdc_rounded_always_shows_exactly_two_decimals():
+    assert format_usdc_rounded(1_000_000) == "$1.00"
+    assert format_usdc_rounded(437_914_959) == "$437.91"
+    assert format_usdc_rounded(34_296_000) == "$34.30"
+    assert format_usdc_rounded(0) == "$0.00"
+
+
+def test_format_usdc_rounded_rounds_half_up():
+    # 0.005 -> 0.01 is what a reader expects; the mode is fixed, not defaulted.
+    assert format_usdc_rounded(5_000) == "$0.01"
+    assert format_usdc_rounded(4_999) == "$0.00"
+    assert format_usdc_rounded(15_000) == "$0.02"
+
+
+def test_format_usdc_rounded_keeps_the_sign_outside_the_currency_mark():
+    assert format_usdc_rounded(-1_500_000) == "-$1.50"
+    assert format_usdc_rounded(-5_000) == "-$0.01"
+
+
+def test_format_usdc_rounded_groups_thousands():
+    assert format_usdc_rounded(1_234_567_890) == "$1,234.57"
+
+
+def test_rounds_exactly_is_true_only_when_nothing_is_lost():
+    assert rounds_exactly(437_910_000) is True
+    assert rounds_exactly(1_000_000) is True
+    assert rounds_exactly(0) is True
+    assert rounds_exactly(437_914_959) is False
+    assert rounds_exactly(123) is False
+
+
+def test_rounds_exactly_handles_negatives():
+    assert rounds_exactly(-1_500_000) is True
+    assert rounds_exactly(-1_500_001) is False
+
+
+def test_rounded_rows_need_not_sum_to_the_rounded_total():
+    # DOCUMENTED LIMITATION, not a bug to fix. Rounding each row independently
+    # does not distribute over addition. This is exactly why any view that
+    # rounds also prints the exact total.
+    band_a, band_b = 433_334_000, 4_891_000
+    total = band_a + band_b  # 438_225_000 -> $438.225 exactly
+
+    assert format_usdc_rounded(band_a) == "$433.33"
+    assert format_usdc_rounded(band_b) == "$4.89"
+    # A reader adding the displayed column gets $438.22 ...
+    # ... but the true total rounds up, because .225 -> .23 under HALF_UP.
+    assert format_usdc_rounded(total) == "$438.23"
+    assert rounds_exactly(total) is False  # so the exact figure is shown
