@@ -667,3 +667,28 @@ def test_suppression_does_not_change_any_money_figure(tmp_path):
     assert data.net_micro_usdc == data.gross_micro_usdc - data.refunded_micro_usdc
     rendered = render_summary(data)
     assert format_usdc(data.net_micro_usdc) in rendered
+
+
+def test_the_report_rounds_aggregates_to_cents(tmp_path):
+    conn = unlabeled_db(tmp_path)
+    out = render_summary(build_report(conn, "2026-08-01", "2026-08-31"))
+    # Every dollar figure in the body carries exactly two decimal places.
+    import re
+    for amount in re.findall(r"\$[\d,]+\.\d+", out.split("Exact net")[0]):
+        assert len(amount.split(".")[1]) == 2, f"{amount} is not rounded to cents"
+
+
+def test_the_report_shows_the_exact_net_when_rounding_lost_something(tmp_path):
+    conn = connect(tmp_path / "r.db")
+    init_schema(conn)
+    conn.execute(
+        """INSERT INTO transactions
+           (tx_hash, sender_address, receiver_address, amount_micro_usdc,
+            timestamp, memo, chain, raw_payload, tx_type)
+           VALUES ('0xa', '0xsender', '0xreceiver', 437914959,
+                   '2026-08-02T00:00:00Z', NULL, 'base', '{}', 'payment')"""
+    )
+    conn.commit()
+    out = render_summary(build_report(conn, "2026-08-01", "2026-08-31"))
+    assert "$437.91" in out
+    assert "$437.914959" in out, "the exact figure must survive somewhere"

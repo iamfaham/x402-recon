@@ -168,3 +168,25 @@ def test_render_gives_no_tax_or_accounting_advice(conn):
     ).lower()
     for forbidden in ("deductible", "taxable", "you should", "consult", "write off"):
         assert forbidden not in rendered
+
+
+def test_customer_bands_round_to_cents_and_keep_the_exact_total(tmp_path):
+    from x402_recon.customers import build_customer_report, render_customer_report
+    from x402_recon.db import connect, init_schema
+
+    conn = connect(tmp_path / "c.db")
+    init_schema(conn)
+    for i in range(3):
+        conn.execute(
+            """INSERT INTO transactions
+               (tx_hash, sender_address, receiver_address, amount_micro_usdc,
+                timestamp, memo, chain, raw_payload, tx_type)
+               VALUES (?, '0xcust', '0xreceiver', 145971653,
+                       '2026-08-02T00:00:00Z', NULL, 'base', '{}', 'payment')""",
+            (f"0x{i}",),
+        )
+    conn.commit()
+
+    out = render_customer_report(build_customer_report(conn, "2026-08-01", "2026-08-31"))
+    assert "$437.91" in out
+    assert "$437.914959" in out, "the exact total must survive somewhere"

@@ -22,7 +22,7 @@ from x402_recon.models import (
     UNCATEGORIZED,
     UNCERTAIN,
 )
-from x402_recon.money import format_usdc, micro_to_decimal
+from x402_recon.money import format_usdc, format_usdc_rounded, micro_to_decimal, rounds_exactly
 
 
 def _payments(count: int) -> str:
@@ -211,7 +211,7 @@ def _format_line(line: CategoryLine, axis: str) -> str:
         counts += f", {line.refund_count} {_refunds(line.refund_count)}"
 
     return (
-        f"  {name:<48} {format_usdc(line.net_micro_usdc):>16}"
+        f"  {name:<48} {format_usdc_rounded(line.net_micro_usdc):>16}"
         f"  ({counts}){marker}"
     )
 
@@ -231,14 +231,14 @@ def render_summary(data: ReportData) -> str:
         header,
         "=" * len(header),
         "",
-        f"Payments received:  {format_usdc(data.gross_micro_usdc)}"
+        f"Payments received:  {format_usdc_rounded(data.gross_micro_usdc)}"
         f"  ({data.payment_count} {_payments(data.payment_count)})",
-        f"Refunds issued:     {format_usdc(data.refunded_micro_usdc)}"
+        f"Refunds issued:     {format_usdc_rounded(data.refunded_micro_usdc)}"
         f"  ({data.refund_count} {_refunds(data.refund_count)})",
-        f"Net received:       {format_usdc(data.net_micro_usdc)}",
+        f"Net received:       {format_usdc_rounded(data.net_micro_usdc)}",
         "",
-        f"  Confidently identified (who paid you): {format_usdc(data.confident_micro_usdc)}",
-        f"  Needs review (who paid you):           {format_usdc(data.uncertain_micro_usdc)}",
+        f"  Confidently identified (who paid you): {format_usdc_rounded(data.confident_micro_usdc)}",
+        f"  Needs review (who paid you):           {format_usdc_rounded(data.uncertain_micro_usdc)}",
     ]
 
     state = calibration_state(data)
@@ -294,6 +294,14 @@ def render_summary(data: ReportData) -> str:
         "This report organizes payment data you have already received.",
         "It is not tax or accounting advice.",
     ]
+
+    if not rounds_exactly(data.net_micro_usdc):
+        lines += [
+            "",
+            f"  Exact net received: {format_usdc(data.net_micro_usdc)}",
+            "  (Figures above are rounded to cents.)",
+        ]
+
     return "\n".join(lines)
 
 
