@@ -1,5 +1,9 @@
 # x402-recon
 
+[![CI](https://github.com/iamfaham/x402-recon/actions/workflows/ci.yml/badge.svg)](https://github.com/iamfaham/x402-recon/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/x402-recon)](https://pypi.org/project/x402-recon/)
+[![Python versions](https://img.shields.io/pypi/pyversions/x402-recon)](https://pypi.org/project/x402-recon/)
+
 Reconciliation and customer analytics for agent-initiated x402/USDC stablecoin
 payments on Base.
 
