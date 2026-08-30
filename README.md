@@ -94,7 +94,7 @@ The tool sends no telemetry. It talks to exactly two kinds of host: the Base
 RPC endpoint you point it at, and — only when you pass `--url` — the x402
 endpoint whose payment address you are discovering. It writes a cache of
 fetched ranges and a copy of any skipped rows under `~/.x402-recon/`;
-`--no-cache` writes nothing to disk at all.
+`--no-cache` uses a temporary database that is deleted when the run ends.
 
 ## Development
 

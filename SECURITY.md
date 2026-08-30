@@ -46,7 +46,8 @@ It sends no telemetry and has no runtime dependencies.
 
 It writes under `~/.x402-recon/`: a per-address SQLite cache of which block
 ranges have been fetched, and `rejects-<address>.json` listing rows that could
-not be processed. `--no-cache` writes nothing to disk.
+not be processed. `--no-cache` uses a temporary database that is deleted when
+the run ends.
 
 Output contains counterparty addresses. Terminal output shortens them by
 default; CSV exports deliberately keep them in full, because that file is the
