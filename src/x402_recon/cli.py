@@ -135,6 +135,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--to", dest="end", required=True, type=_valid_date, help="YYYY-MM-DD"
     )
     report.add_argument("--csv", help="also write line-item detail to this CSV path")
+    report.add_argument(
+        "--full-addresses",
+        action="store_true",
+        help="show payer addresses in full instead of shortened",
+    )
 
     customers = sub.add_parser(
         "customers", help="split payers into returning vs one-shot for a date range"
@@ -405,10 +410,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "report":
         data = build_report(conn, args.start, args.end)
-        print(render_summary(data))
+        print(render_summary(data, redact=not args.full_addresses))
         if args.csv:
             written = write_csv(conn, args.start, args.end, Path(args.csv))
             print(f"\nWrote {written} rows to {args.csv}")
+            print(
+                "  This file contains full addresses and transaction hashes. "
+                "Review before sharing."
+            )
         return 0
 
     if args.command == "customers":

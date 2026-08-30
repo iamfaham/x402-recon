@@ -516,15 +516,23 @@ def unlabeled_db(tmp_path: Path):
 
 
 def labeled_db(tmp_path: Path):
-    """Every reported tx_hash is present in ground_truth."""
+    """Every reported tx_hash is present in ground_truth.
+
+    Sender addresses are full 42-character hex addresses (not the short "0xa"
+    placeholders other fixtures use) so tests can assert on redaction, which
+    only kicks in above 16 characters.
+    """
     conn = connect(tmp_path / "l.db")
     init_schema(conn)
     seed_with_types(
         conn,
         [
-            ("0x1", "0xa", None, "2026-08-10T10:00:00Z", 3_000_000, "payment"),
-            ("0x2", "0xa", None, "2026-08-10T10:01:00Z", 1_000_000, "payment"),
-            ("0x3", "0xb", None, "2026-08-11T10:00:00Z", 2_000_000, "payment"),
+            ("0x1", "0x1111111111111111111111111111111111aaaa", None,
+             "2026-08-10T10:00:00Z", 3_000_000, "payment"),
+            ("0x2", "0x1111111111111111111111111111111111aaaa", None,
+             "2026-08-10T10:01:00Z", 1_000_000, "payment"),
+            ("0x3", "0x2222222222222222222222222222222222bbbb", None,
+             "2026-08-11T10:00:00Z", 2_000_000, "payment"),
         ],
     )
     run_categorize(conn)
@@ -709,3 +717,30 @@ def test_the_report_shows_the_exact_net_when_rounding_lost_something(tmp_path):
     body = out.split("Exact net")[0]
     assert re.search(r"\$437\.91(?!\d)", body), "expected a rounded $437.91, not an unrounded prefix match"
     assert "$437.914959" in out, "the exact figure must survive somewhere"
+
+
+def test_payer_labels_are_redacted_by_default(tmp_path):
+    conn = labeled_db(tmp_path)
+    out = render_summary(build_report(conn, "2026-08-01", "2026-08-31"))
+    # An agent: label must never carry a full 42-character address.
+    for line in out.splitlines():
+        if "agent:" in line:
+            assert "…" in line, f"unredacted payer label: {line}"
+
+
+def test_full_payer_labels_can_be_restored(tmp_path):
+    conn = labeled_db(tmp_path)
+    redacted = render_summary(build_report(conn, "2026-08-01", "2026-08-31"))
+    full = render_summary(build_report(conn, "2026-08-01", "2026-08-31"), redact=False)
+    assert redacted != full, "redact=False must change the output"
+
+
+def test_redaction_does_not_change_the_stored_label(tmp_path):
+    # Grouping depends on the stored label; only its rendering is shortened.
+    conn = labeled_db(tmp_path)
+    data = build_report(conn, "2026-08-01", "2026-08-31")
+    labels = [line.category_label for line in data.payer_lines]
+    assert any(
+        label.startswith("agent:0x") and "…" not in label
+        for label in labels
+    ), "stored labels must remain full addresses"

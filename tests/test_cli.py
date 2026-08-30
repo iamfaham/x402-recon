@@ -489,3 +489,21 @@ def test_a_hidden_command_still_works_exactly_as_before(tmp_path, capsys):
     # Hiding must not break anyone following existing documentation.
     assert main(["simulate", "--out", str(tmp_path), "--count", "10"]) == 0
     assert (tmp_path / "transactions.json").exists()
+
+
+def test_writing_a_csv_warns_that_it_contains_full_addresses(tmp_path: Path, capsys):
+    db = tmp_path / "l.db"
+    data = tmp_path / "data"
+
+    main(["simulate", "--out", str(data), "--count", "120", "--seed", "42"])
+    main(["--db", str(db), "ingest", "--from", str(data)])
+    main(["--db", str(db), "categorize"])
+    capsys.readouterr()
+
+    main(
+        ["--db", str(db), "report", "--from", "2026-08-01", "--to", "2026-09-30",
+         "--csv", str(tmp_path / "out.csv")]
+    )
+    out = capsys.readouterr().out
+    assert "full addresses" in out.lower()
+    assert "review before sharing" in out.lower()

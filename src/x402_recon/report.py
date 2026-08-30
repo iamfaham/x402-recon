@@ -23,6 +23,7 @@ from x402_recon.models import (
     UNCERTAIN,
 )
 from x402_recon.money import exact_net_footer, format_usdc_rounded, micro_to_decimal
+from x402_recon.privacy import shorten_address
 
 
 def _payments(count: int) -> str:
@@ -189,17 +190,23 @@ def calibration_state(data: ReportData) -> str:
     return "partial"
 
 
-def _format_line(line: CategoryLine, axis: str) -> str:
+def _format_line(line: CategoryLine, axis: str, *, redact: bool = True) -> str:
     """Render one breakdown row.
 
     The [needs review] marker is gated on UNCERTAIN specifically. Both axes now
     tier the same way - CONFIDENT for a claimed grouping, UNCERTAIN for a
     declined one - so this reads identically for payer and service rows.
+
+    A payer label carries the sender's address. It is shortened for display
+    only; the stored label keeps the full address, because grouping depends
+    on it.
     """
     if line.category_label == UNCATEGORIZED:
         name = "Not identified" if axis == AXIS_PAYER else "No service identified"
     else:
         name = line.category_label
+        if redact and name.startswith("agent:"):
+            name = "agent:" + shorten_address(name[len("agent:"):])
 
     marker = "   [needs review]" if line.confidence_tier == UNCERTAIN else ""
 
@@ -216,8 +223,11 @@ def _format_line(line: CategoryLine, axis: str) -> str:
     )
 
 
-def render_summary(data: ReportData) -> str:
-    """Render the plain-language summary."""
+def render_summary(data: ReportData, *, redact: bool = True) -> str:
+    """Render the plain-language summary.
+
+    Payer labels are shortened by default; `redact=False` shows them in full.
+    """
     header = f"Payments received, {data.start} to {data.end}"
 
     if data.transaction_count == 0:
@@ -263,7 +273,7 @@ def render_summary(data: ReportData) -> str:
         "Who paid you (net of refunds)",
         "-----------------------------",
     ]
-    lines += [_format_line(line, AXIS_PAYER) for line in data.payer_lines]
+    lines += [_format_line(line, AXIS_PAYER, redact=redact) for line in data.payer_lines]
 
     if data.memo_count == 0:
         lines += [
@@ -283,7 +293,7 @@ def render_summary(data: ReportData) -> str:
             "  Grouped by the memo the payer sent. These groupings describe what was",
             "  bought; they are not a claim about who bought it.",
         ]
-        lines += [_format_line(line, AXIS_SERVICE) for line in data.service_lines]
+        lines += [_format_line(line, AXIS_SERVICE, redact=redact) for line in data.service_lines]
 
     lines += [
         "",
@@ -301,7 +311,13 @@ def render_summary(data: ReportData) -> str:
 
 
 def write_csv(conn: sqlite3.Connection, start: str, end: str, out_path: Path) -> int:
-    """Write line-item detail to CSV. Returns the number of rows written."""
+    """Write line-item detail to CSV. Returns the number of rows written.
+
+    Unlike the summary, this deliberately writes full, unredacted addresses
+    and transaction hashes - it is the accounting artifact, and a truncated
+    address cannot be reconciled against anything. Callers must warn the
+    user that the written file is sensitive.
+    """
     rows = conn.execute(_SELECT_IN_RANGE, _bounds(start, end)).fetchall()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
