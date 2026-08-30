@@ -75,6 +75,27 @@ expected result).
   own labeled sample — payer/service grouping is calibrated on simulated
   data by default.
 
+## Privacy
+
+Addresses on a public blockchain are not secret — anyone can read them. What
+this tool creates that the chain does not publish is the **association**:
+"these addresses are the customers of *this* seller." That association is
+yours, and it should not leave your machine by accident.
+
+So terminal output shortens addresses by default (`0x6d6E695b…0B9192`). Pass
+`--full-addresses` when you want them whole.
+
+CSV exports are the exception: they keep full addresses and transaction
+hashes, because that is the artifact you reconcile against a bank export or
+look up on a block explorer, and a truncated address is useless for both.
+Writing one prints a reminder to review it before sharing.
+
+The tool sends no telemetry. It talks to exactly two kinds of host: the Base
+RPC endpoint you point it at, and — only when you pass `--url` — the x402
+endpoint whose payment address you are discovering. It writes a cache of
+fetched ranges and a copy of any skipped rows under `~/.x402-recon/`;
+`--no-cache` writes nothing to disk at all.
+
 ## Development
 
 ```bash

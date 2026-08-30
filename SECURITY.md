@@ -33,3 +33,22 @@ caller by protocol design. Nothing this tool reads is privileged.
 
 There are none. The package installs no third-party code at runtime, which is
 a deliberate choice for a tool that reads financial records.
+
+## What this tool reads, writes and sends
+
+It reads public chain data through a Base RPC endpoint, and — only with
+`--url` — makes one unpaid request to the x402 endpoint whose payment address
+it is discovering. Those are the only two network destinations; a structural
+test (`tests/test_invariants.py`) fails the build if any module other than
+`rpc.py` and `discover.py` imports `urllib`.
+
+It sends no telemetry and has no runtime dependencies.
+
+It writes under `~/.x402-recon/`: a per-address SQLite cache of which block
+ranges have been fetched, and `rejects-<address>.json` listing rows that could
+not be processed. `--no-cache` writes nothing to disk.
+
+Output contains counterparty addresses. Terminal output shortens them by
+default; CSV exports deliberately keep them in full, because that file is the
+accounting artifact. Review a CSV before sharing it — it identifies who paid
+you.
