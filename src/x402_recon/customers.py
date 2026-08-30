@@ -19,7 +19,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from x402_recon.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND
-from x402_recon.money import format_usdc, format_usdc_rounded, rounds_exactly
+from x402_recon.money import exact_net_footer, format_usdc_rounded
 
 BAND_RETURNING = "returning"
 BAND_TRIED_TWICE = "tried_twice"
@@ -171,12 +171,7 @@ def render_customer_report(report: CustomerReport) -> str:
     lines += ["", f"  {'Total':<16}{report.distinct_payers:>8,}"
               f"{report.payment_count:>11,}{format_usdc_rounded(report.net_micro_usdc):>16}"]
 
-    if not rounds_exactly(report.net_micro_usdc):
-        lines += [
-            "",
-            f"  Exact net received: {format_usdc(report.net_micro_usdc)}",
-            "  (Figures above are rounded to cents.)",
-        ]
+    lines += exact_net_footer(report.net_micro_usdc)
 
     if report.looks_like_probe_traffic:
         lines += [

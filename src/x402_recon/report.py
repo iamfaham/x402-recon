@@ -22,7 +22,7 @@ from x402_recon.models import (
     UNCATEGORIZED,
     UNCERTAIN,
 )
-from x402_recon.money import format_usdc, format_usdc_rounded, micro_to_decimal, rounds_exactly
+from x402_recon.money import exact_net_footer, format_usdc_rounded, micro_to_decimal
 
 
 def _payments(count: int) -> str:
@@ -295,12 +295,7 @@ def render_summary(data: ReportData) -> str:
         "It is not tax or accounting advice.",
     ]
 
-    if not rounds_exactly(data.net_micro_usdc):
-        lines += [
-            "",
-            f"  Exact net received: {format_usdc(data.net_micro_usdc)}",
-            "  (Figures above are rounded to cents.)",
-        ]
+    lines += exact_net_footer(data.net_micro_usdc)
 
     return "\n".join(lines)
 

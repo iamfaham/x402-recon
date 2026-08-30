@@ -88,3 +88,20 @@ def rounds_exactly(micro: int) -> bool:
     presence meaningful.
     """
     return micro % _MICRO_PER_CENT == 0
+
+
+def exact_net_footer(micro: int) -> list[str]:
+    """Lines to append below a rounded total when rounding actually lost
+    precision; an empty list when it did not.
+
+    Shared by report.py and customers.py, whose rounded-aggregate tables both
+    end with this same three-line block. Callers append the result to their
+    own `lines` list unconditionally - it is a no-op when rounding was exact.
+    """
+    if rounds_exactly(micro):
+        return []
+    return [
+        "",
+        f"  Exact net received: {format_usdc(micro)}",
+        "  (Figures above are rounded to cents.)",
+    ]

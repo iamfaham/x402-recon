@@ -188,5 +188,11 @@ def test_customer_bands_round_to_cents_and_keep_the_exact_total(tmp_path):
     conn.commit()
 
     out = render_customer_report(build_customer_report(conn, "2026-08-01", "2026-08-31"))
-    assert "$437.91" in out
+    # A plain "$437.91" in out substring check would also pass against the
+    # unrounded "$437.914959" (it's a literal prefix of it), so this checks
+    # that $437.91 is not itself followed by more digits anywhere before the
+    # exact-figure footer - which only the rounded formatter produces.
+    import re
+    body = out.split("Exact net")[0]
+    assert re.search(r"\$437\.91(?!\d)", body), "expected a rounded $437.91, not an unrounded prefix match"
     assert "$437.914959" in out, "the exact total must survive somewhere"

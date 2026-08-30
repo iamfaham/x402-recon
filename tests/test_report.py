@@ -671,6 +671,17 @@ def test_suppression_does_not_change_any_money_figure(tmp_path):
 
 def test_the_report_rounds_aggregates_to_cents(tmp_path):
     conn = unlabeled_db(tmp_path)
+    # unlabeled_db's own seed amounts are all cent-exact, which renders the
+    # same whether or not rounding is applied - add one sub-cent amount so
+    # this test actually distinguishes rounded from unrounded formatting.
+    conn.execute(
+        """INSERT INTO transactions
+           (tx_hash, sender_address, receiver_address, amount_micro_usdc,
+            timestamp, memo, chain, raw_payload, tx_type)
+           VALUES ('0xsubcent', '0xc', '0xreceiver', 145971653,
+                   '2026-08-12T00:00:00Z', NULL, 'base', '{}', 'payment')"""
+    )
+    conn.commit()
     out = render_summary(build_report(conn, "2026-08-01", "2026-08-31"))
     # Every dollar figure in the body carries exactly two decimal places.
     import re
@@ -690,5 +701,11 @@ def test_the_report_shows_the_exact_net_when_rounding_lost_something(tmp_path):
     )
     conn.commit()
     out = render_summary(build_report(conn, "2026-08-01", "2026-08-31"))
-    assert "$437.91" in out
+    # A plain "$437.91" in out substring check would also pass against the
+    # unrounded "$437.914959" (it's a literal prefix of it), so this checks
+    # that $437.91 is not itself followed by more digits anywhere before the
+    # exact-figure footer - which only the rounded formatter produces.
+    import re
+    body = out.split("Exact net")[0]
+    assert re.search(r"\$437\.91(?!\d)", body), "expected a rounded $437.91, not an unrounded prefix match"
     assert "$437.914959" in out, "the exact figure must survive somewhere"
