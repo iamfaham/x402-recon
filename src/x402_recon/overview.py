@@ -23,7 +23,7 @@ import sqlite3
 from dataclasses import dataclass, field
 
 from x402_recon.customers import _BAND_LABELS, CustomerReport, build_customer_report
-from x402_recon.money import format_usdc
+from x402_recon.money import format_usdc, format_usdc_rounded, rounds_exactly
 from x402_recon.report import ReportData, build_report, calibration_state
 from x402_recon.verify import SampleResult, render_sample
 
@@ -105,7 +105,7 @@ def render_overview(overview: Overview) -> str:
         return "\n".join(lines)
 
     lines += [
-        f"  Net received          {format_usdc(report.net_micro_usdc)}"
+        f"  Net received          {format_usdc_rounded(report.net_micro_usdc)}"
         f"    from {report.payment_count} payments",
         f"  Distinct payers       {customers.distinct_payers:>8}"
         f"    {customers.payments_per_payer:.1f} payments each",
@@ -123,7 +123,7 @@ def render_overview(overview: Overview) -> str:
         )
         lines.append(
             f"  {_BAND_LABELS[band.label]:<16}{band.payer_count:>8,}"
-            f"{band.payment_count:>11,}{format_usdc(band.net_micro_usdc):>16}"
+            f"{band.payment_count:>11,}{format_usdc_rounded(band.net_micro_usdc):>16}"
             f"{share:>9.1%}"
         )
 
@@ -154,6 +154,11 @@ def render_overview(overview: Overview) -> str:
         if sample_line:
             notes.append(sample_line)
 
+    if not rounds_exactly(report.net_micro_usdc):
+        notes.append(
+            f"Figures above are rounded to cents. Exact net received: "
+            f"{format_usdc(report.net_micro_usdc)}."
+        )
     notes.append(
         "The chain records no memo, so what was bought cannot be shown - that "
         "lives in your request log, not on-chain."

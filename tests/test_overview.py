@@ -158,3 +158,33 @@ def test_it_gives_no_tax_or_accounting_advice(conn):
     ).lower()
     for forbidden in ("deductible", "taxable", "you should", "consult", "write off"):
         assert forbidden not in text
+
+
+def test_the_overview_rounds_aggregates_to_cents(conn):
+    _seed(conn, [("0xa", "0xcust0", 437_914_959, "2026-08-02T00:00:00Z")])
+    out = render_overview(build_overview(conn, ADDRESS, "2026-08-01", "2026-08-31"))
+    assert "$437.91" in out
+    assert "$437.914959" not in out.split("Notes")[0], "the table must not show six decimals"
+
+
+def test_the_overview_shows_the_exact_total_when_rounding_lost_something(conn):
+    _seed(conn, [("0xa", "0xcust0", 437_914_959, "2026-08-02T00:00:00Z")])
+    out = render_overview(build_overview(conn, ADDRESS, "2026-08-01", "2026-08-31"))
+    assert "$437.914959" in out, "the exact figure must survive somewhere"
+
+
+def test_the_overview_omits_the_exact_total_when_rounding_lost_nothing(conn):
+    # Two payments from the same payer (rather than one) so payments-per-payer
+    # clears PROBE_RATIO_CEILING and the unrelated probe-traffic warning (whose
+    # wording "appeared exactly once" itself contains the substring "exact")
+    # does not confound this assertion.
+    _seed(
+        conn,
+        [
+            ("0xa", "0xcust0", 2_500_000, "2026-08-02T00:00:00Z"),
+            ("0xb", "0xcust0", 2_500_000, "2026-08-03T00:00:00Z"),
+        ],
+    )
+    out = render_overview(build_overview(conn, ADDRESS, "2026-08-01", "2026-08-31"))
+    assert "$5.00" in out
+    assert "exact" not in out.lower(), "a clean total needs no footnote"
