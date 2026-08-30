@@ -6,11 +6,12 @@ fetched batch replayable from disk.
 """
 
 import json
-import random
 import time
 import urllib.request
 
+from x402_recon import retry as retry_module
 from x402_recon.chain import block_timestamp_to_iso
+from x402_recon.retry import retry_transient
 
 DEFAULT_BASE_RPC_URL = "https://mainnet.base.org"
 
@@ -32,14 +33,12 @@ _TIMEOUT_SECONDS = 30
 # this header get 403 with none and 200 with any named one.
 _USER_AGENT = "x402-recon (+https://github.com/iamfaham/x402-recon)"
 
-# Codes that mean "try again shortly", not "your request was wrong".
-# 503 is what mainnet.base.org actually returned three times consecutively
-# during the first real run against it.
-TRANSIENT_HTTP_CODES = frozenset({429, 502, 503, 504})
-
-MAX_RETRY_ATTEMPTS = 4
-MAX_RETRY_SECONDS = 30.0
-BASE_RETRY_DELAY = 0.5
+# The retry policy is shared with discover.py so the two cannot drift apart;
+# re-exported here because this module's callers and tests read them from it.
+TRANSIENT_HTTP_CODES = retry_module.TRANSIENT_HTTP_CODES
+MAX_RETRY_ATTEMPTS = retry_module.MAX_RETRY_ATTEMPTS
+MAX_RETRY_SECONDS = retry_module.MAX_RETRY_SECONDS
+BASE_RETRY_DELAY = retry_module.BASE_RETRY_DELAY
 
 # One HTTP request carrying many eth_getBlockByNumber calls. A 30-day report
 # touches thousands of distinct blocks; batching turns ~5,000 round trips
@@ -133,30 +132,10 @@ class RpcClient:
     def _send_with_retry(self, payload):
         """Send, retrying transient failures with jittered exponential backoff.
 
-        Nothing retries silently: a slow run must be explicable rather than
-        mysterious, which is the same guarantee the reject list gives for data.
+        The policy itself lives in retry.py, shared with discover.py; RpcError
+        carries the `transient` flag it reads.
         """
-        attempt = 0
-        slept = 0.0
-        while True:
-            try:
-                return self._transport(payload)
-            except RpcError as exc:
-                attempt += 1
-                if (
-                    not exc.transient
-                    or attempt >= MAX_RETRY_ATTEMPTS
-                    or slept >= MAX_RETRY_SECONDS
-                ):
-                    raise
-                delay = BASE_RETRY_DELAY * (2 ** (attempt - 1))
-                delay *= random.uniform(0.5, 1.5)  # jitter: avoid a thundering herd
-                delay = min(delay, MAX_RETRY_SECONDS - slept)
-                print(
-                    f"  retry {attempt}/{MAX_RETRY_ATTEMPTS} in {delay:.1f}s: {exc}"
-                )
-                self._sleep(delay)
-                slept += delay
+        return retry_transient(lambda: self._transport(payload), sleep=self._sleep)
 
     def call(self, method: str, params: list) -> object:
         self._request_id += 1

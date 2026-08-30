@@ -1,3 +1,7 @@
+import io
+import json
+import urllib.error
+
 import pytest
 
 from x402_recon.chain import USDC_BASE_MAINNET
@@ -149,3 +153,153 @@ def test_a_non_json_body_is_reported_rather_than_crashing():
 
     with pytest.raises(DiscoveryError, match="could not read"):
         discover(URL, transport=transport)
+
+
+# --- transient-failure resilience -------------------------------------------
+#
+# discover is the first command a new user runs. A blip on the seller's
+# endpoint should not read as "this is not an x402 endpoint".
+
+
+def _recording_sleep():
+    waits = []
+    return waits, waits.append
+
+
+def test_a_transient_failure_that_recovers_returns_the_requirements():
+    waits, sleep = _recording_sleep()
+    attempts = []
+
+    def transport(url):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise DiscoveryError("503", status=503, transient=True)
+        return 402, _v2_body()
+
+    got = discover(URL, transport=transport, sleep=sleep)
+    assert got.pay_to == PAY_TO
+    assert len(attempts) == 3
+    assert len(waits) == 2
+
+
+def test_a_permanent_failure_is_not_retried():
+    waits, sleep = _recording_sleep()
+    attempts = []
+
+    def transport(url):
+        attempts.append(1)
+        return 404, {"detail": "not found"}
+
+    with pytest.raises(DiscoveryError, match="did not ask for payment"):
+        discover(URL, transport=transport, sleep=sleep)
+
+    assert attempts == [1], "a 404 is an answer, not a blip"
+    assert waits == []
+
+
+def test_exhausted_retries_still_name_what_went_wrong():
+    waits, sleep = _recording_sleep()
+
+    def transport(url):
+        raise DiscoveryError(
+            "https://example.test/search answered HTTP 503",
+            status=503,
+            transient=True,
+        )
+
+    with pytest.raises(DiscoveryError, match="503"):
+        discover(URL, transport=transport, sleep=sleep)
+
+    assert len(waits) == 3, "should have retried before giving up"
+
+
+def test_the_default_transport_retries_a_503_serving_an_html_body(monkeypatch):
+    # The load-bearing case. Cloudflare and nginx answer 503 with an HTML
+    # error page, not JSON. Classifying on the status code BEFORE parsing is
+    # what keeps that from surfacing as an unretryable JSON parse failure.
+    from x402_recon import discover as discover_module
+
+    attempts = []
+
+    def fake_urlopen(request, timeout):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise urllib.error.HTTPError(
+                URL, 503, "Service Unavailable", {}, io.BytesIO(b"<html>oh no</html>")
+            )
+        raise urllib.error.HTTPError(
+            URL, 402, "Payment Required", {}, io.BytesIO(json.dumps(_v2_body()).encode())
+        )
+
+    monkeypatch.setattr(discover_module.urllib.request, "urlopen", fake_urlopen)
+
+    waits, sleep = _recording_sleep()
+    got = discover_module.discover(URL, sleep=sleep)
+
+    assert got.pay_to == PAY_TO
+    assert len(attempts) == 3
+    assert len(waits) == 2
+
+
+def test_the_default_transport_treats_a_dropped_connection_as_retryable(monkeypatch):
+    from x402_recon import discover as discover_module
+
+    attempts = []
+
+    def fake_urlopen(request, timeout):
+        attempts.append(1)
+        if len(attempts) < 2:
+            raise urllib.error.URLError("connection reset by peer")
+        raise urllib.error.HTTPError(
+            URL, 402, "Payment Required", {}, io.BytesIO(json.dumps(_v2_body()).encode())
+        )
+
+    monkeypatch.setattr(discover_module.urllib.request, "urlopen", fake_urlopen)
+
+    waits, sleep = _recording_sleep()
+    assert discover_module.discover(URL, sleep=sleep).pay_to == PAY_TO
+    assert len(attempts) == 2
+
+
+def test_the_default_transport_treats_a_body_read_timeout_as_retryable(monkeypatch):
+    # A timeout during the body read raises a bare TimeoutError - an OSError
+    # but NOT a urllib.error.URLError, and neither subclasses the other. The
+    # same gap that was fixed in rpc.py.
+    from x402_recon import discover as discover_module
+
+    attempts = []
+
+    def fake_urlopen(request, timeout):
+        attempts.append(1)
+        if len(attempts) < 2:
+            raise TimeoutError("timed out")
+        raise urllib.error.HTTPError(
+            URL, 402, "Payment Required", {}, io.BytesIO(json.dumps(_v2_body()).encode())
+        )
+
+    monkeypatch.setattr(discover_module.urllib.request, "urlopen", fake_urlopen)
+
+    waits, sleep = _recording_sleep()
+    assert discover_module.discover(URL, sleep=sleep).pay_to == PAY_TO
+    assert len(attempts) == 2
+
+
+def test_a_404_from_the_default_transport_is_not_retried(monkeypatch):
+    from x402_recon import discover as discover_module
+
+    attempts = []
+
+    def fake_urlopen(request, timeout):
+        attempts.append(1)
+        raise urllib.error.HTTPError(
+            URL, 404, "Not Found", {}, io.BytesIO(b'{"detail": "nope"}')
+        )
+
+    monkeypatch.setattr(discover_module.urllib.request, "urlopen", fake_urlopen)
+
+    waits, sleep = _recording_sleep()
+    with pytest.raises(DiscoveryError, match="did not ask for payment"):
+        discover_module.discover(URL, sleep=sleep)
+
+    assert attempts == [1]
+    assert waits == []

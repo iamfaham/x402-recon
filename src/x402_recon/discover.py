@@ -11,11 +11,13 @@ and it is public information the seller publishes themselves.
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
 from x402_recon.chain import USDC_BASE_MAINNET
+from x402_recon.retry import TRANSIENT_HTTP_CODES, retry_transient
 
 BASE_MAINNET_CAIP2 = "eip155:8453"
 
@@ -25,7 +27,18 @@ _USER_AGENT = "x402-recon (+https://github.com/iamfaham/x402-recon)"
 
 
 class DiscoveryError(RuntimeError):
-    """The endpoint did not yield usable payment requirements."""
+    """The endpoint did not yield usable payment requirements.
+
+    `transient` distinguishes "the seller's endpoint is having a moment" from
+    "this is not an x402 endpoint". discover is the first command a new user
+    runs, and reporting a passing 503 as the latter is a lie that costs them
+    the tool.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None, transient: bool = False):
+        super().__init__(message)
+        self.status = status
+        self.transient = transient
 
 
 @dataclass(frozen=True)
@@ -114,14 +127,37 @@ def _urllib_transport(url: str) -> tuple[int, dict]:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         # A 402 arrives as an HTTPError; its body is what we came for.
+        if exc.code in TRANSIENT_HTTP_CODES:
+            # Classify on the status BEFORE reading the body. Cloudflare and
+            # nginx answer 503 with an HTML error page, and json.loads on that
+            # raises ValueError - which would bury a retryable condition
+            # under a parse failure and report it as "not an x402 endpoint".
+            raise DiscoveryError(
+                f"{url} answered HTTP {exc.code}: {exc.reason}",
+                status=exc.code,
+                transient=True,
+            ) from exc
         return exc.code, json.loads(exc.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise DiscoveryError(
+            f"could not reach {url}: {exc.reason}", transient=True
+        ) from exc
+    except TimeoutError as exc:
+        # A timeout during the body read raises a bare TimeoutError - an
+        # OSError but NOT a urllib.error.URLError, and neither subclasses the
+        # other. TimeoutError has no `.reason`, so use str(exc) here.
+        raise DiscoveryError(f"could not reach {url}: {exc}", transient=True) from exc
 
 
-def discover(url: str, *, transport=None) -> PaymentRequirements:
-    """Make one unpaid request and read the payment requirements from it."""
+def discover(url: str, *, transport=None, sleep=time.sleep) -> PaymentRequirements:
+    """Make one unpaid request and read the payment requirements from it.
+
+    A transient failure is retried with backoff rather than reported as a
+    missing paywall; the policy is the one rpc.py uses, shared via retry.py.
+    """
     send = transport or _urllib_transport
     try:
-        status, body = send(url)
+        status, body = retry_transient(lambda: send(url), sleep=sleep)
     except DiscoveryError:
         raise
     except (ValueError, OSError) as exc:
