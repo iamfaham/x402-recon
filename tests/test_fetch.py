@@ -307,3 +307,25 @@ def test_prefetch_uses_batching_not_sequential_fallback():
         "batch timestamp resolution failed or fixture doesn't support batching; "
         "prefetch fell back to sequential calls, defeating the performance goal"
     )
+
+
+def test_write_fetched_also_writes_the_reject_list(tmp_path):
+    import json
+
+    from x402_recon.fetch import FetchResult, write_fetched
+
+    result = FetchResult(transactions=[], rejects=[("0xabc", "no blockNumber")])
+    write_fetched(result, tmp_path)
+
+    rejects_path = tmp_path / "rejects.json"
+    assert rejects_path.exists(), "a skipped row must survive the terminal"
+    assert json.loads(rejects_path.read_text(encoding="utf-8")) == [
+        {"tx_hash": "0xabc", "reason": "no blockNumber"}
+    ]
+
+
+def test_write_fetched_still_returns_the_transactions_path(tmp_path):
+    from x402_recon.fetch import FetchResult, write_fetched
+
+    path = write_fetched(FetchResult(transactions=[], rejects=[]), tmp_path)
+    assert path.name == "transactions.json"

@@ -16,6 +16,7 @@ from x402_recon.chain import (
     log_to_transaction,
 )
 from x402_recon.models import TX_TYPE_PAYMENT, TX_TYPE_REFUND, Transaction
+from x402_recon.rejects import write_rejects
 from x402_recon.rpc import RpcClient
 
 
@@ -132,7 +133,7 @@ def fetch_transactions(
 
 
 def write_fetched(result: FetchResult, out_dir: Path) -> Path:
-    """Write transactions.json only.
+    """Write transactions.json and rejects.json.
 
     No ground_truth.json is written. Real data arrives unlabeled, and an empty
     truth file would make the report believe it had been calibrated.
@@ -158,6 +159,7 @@ def write_fetched(result: FetchResult, out_dir: Path) -> Path:
             indent=2,
         )
     )
+    write_rejects(result.rejects, out_dir / "rejects.json")
     return path
 
 
