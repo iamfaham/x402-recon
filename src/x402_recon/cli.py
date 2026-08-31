@@ -138,6 +138,7 @@ def _build_parser() -> argparse.ArgumentParser:
     report.add_argument(
         "--full-addresses",
         action="store_true",
+        default=argparse.SUPPRESS,
         help="show payer addresses in full instead of shortened",
     )
 

@@ -229,6 +229,64 @@ def test_evaluate_without_service_truth_still_scores_the_payer_axis(tmp_path: Pa
     assert "unscored" in out.lower()
 
 
+def _seeded_report_db(tmp_path: Path):
+    """A database with a full 42-character sender address so redaction is
+    actually observable (shorten_address is a no-op at <=16 chars)."""
+    db = tmp_path / "l.db"
+    data = tmp_path / "data"
+    data.mkdir()
+    address = "0x" + "ab" * 20
+    (data / "transactions.json").write_text(
+        f"""[{{"tx_hash": "0x1", "sender_address": "{address}",
+             "receiver_address": "0xm", "amount_micro_usdc": 1000000,
+             "timestamp": "2026-08-10T10:00:00Z", "memo": null,
+             "chain": "sim", "raw_payload": "{{}}"}},
+             {{"tx_hash": "0x2", "sender_address": "{address}",
+             "receiver_address": "0xm", "amount_micro_usdc": 2000000,
+             "timestamp": "2026-08-11T10:00:00Z", "memo": null,
+             "chain": "sim", "raw_payload": "{{}}"}}]"""
+    )
+    main(["--db", str(db), "ingest", "--from", str(data)])
+    main(["--db", str(db), "categorize"])
+    return db, address
+
+
+def test_full_addresses_flag_before_report_is_honored(tmp_path: Path, capsys):
+    db, address = _seeded_report_db(tmp_path)
+    capsys.readouterr()
+
+    main(
+        ["--db", str(db), "--full-addresses", "report",
+         "--from", "2026-08-01", "--to", "2026-08-31"]
+    )
+    out = capsys.readouterr().out
+    assert address in out, "explicit top-level --full-addresses must not be lost"
+
+
+def test_full_addresses_flag_after_report_is_honored(tmp_path: Path, capsys):
+    db, address = _seeded_report_db(tmp_path)
+    capsys.readouterr()
+
+    main(
+        ["--db", str(db), "report", "--full-addresses",
+         "--from", "2026-08-01", "--to", "2026-08-31"]
+    )
+    out = capsys.readouterr().out
+    assert address in out
+
+
+def test_report_without_full_addresses_flag_stays_redacted(tmp_path: Path, capsys):
+    db, address = _seeded_report_db(tmp_path)
+    capsys.readouterr()
+
+    main(
+        ["--db", str(db), "report", "--from", "2026-08-01", "--to", "2026-08-31"]
+    )
+    out = capsys.readouterr().out
+    assert address not in out
+    assert "…" in out
+
+
 def test_report_shows_both_breakdowns(tmp_path: Path, capsys):
     db = tmp_path / "l.db"
     data = tmp_path / "data"
