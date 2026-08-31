@@ -417,14 +417,90 @@ def test_reject_filename_is_lowercased_like_the_cache_db(monkeypatch, tmp_path, 
     # share one reject file.
     mixed_case_address = "0x" + "Ab" * 20
     _stub_overview_with_rejects(monkeypatch, tmp_path, rejects=[("0xabc", "bad")])
+    # This is the one overview test that runs WITHOUT --no-cache, so it takes
+    # the real caching branch. Both of these must be redirected: cache_dir for
+    # the reject file, and cache_path for the SQLite database - cache_path
+    # resolves cache_dir through its own module, so patching only the name
+    # cli.py imported would still write a database into the developer's real
+    # home directory.
     monkeypatch.setattr("x402_recon.cli.cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "x402_recon.cli.cache_path", lambda address: tmp_path / f"{address.lower()}.db"
+    )
 
     main([mixed_case_address, "--last", "30d"])
     out = capsys.readouterr().out
 
     expected = tmp_path / f"rejects-{mixed_case_address.lower()}.json"
-    assert expected.exists(), f"expected lowercased reject filename, got output: {out}"
-    assert str(expected) in out
+    # Asserting on the printed path, not just exists(): NTFS is
+    # case-insensitive, so exists() alone would pass on the un-lowercased
+    # filename this test exists to catch.
+    assert str(expected) in out, f"expected lowercased reject filename in: {out}"
+    assert expected.exists()
+
+
+def test_rpc_url_set_before_fetch_is_not_silently_discarded():
+    # The tool's own rate-limit advice tells users to "pass --rpc-url with
+    # your own provider". Typing it before the subcommand must not quietly
+    # send their traffic to the public endpoint instead.
+    from x402_recon.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        [
+            "--rpc-url",
+            "https://mine.example",
+            "fetch",
+            "--receiver",
+            "0x" + "ab" * 20,
+            "--out",
+            "unused",
+            "--from-block",
+            "1",
+            "--to-block",
+            "2",
+        ]
+    )
+    assert args.rpc_url == "https://mine.example"
+
+
+def test_rpc_url_set_after_fetch_still_wins():
+    from x402_recon.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        [
+            "fetch",
+            "--receiver",
+            "0x" + "ab" * 20,
+            "--out",
+            "unused",
+            "--from-block",
+            "1",
+            "--to-block",
+            "2",
+            "--rpc-url",
+            "https://mine.example",
+        ]
+    )
+    assert args.rpc_url == "https://mine.example"
+
+
+def test_rpc_url_falls_back_to_the_default_when_never_given():
+    from x402_recon.cli import DEFAULT_BASE_RPC_URL, _build_parser
+
+    args = _build_parser().parse_args(
+        [
+            "fetch",
+            "--receiver",
+            "0x" + "ab" * 20,
+            "--out",
+            "unused",
+            "--from-block",
+            "1",
+            "--to-block",
+            "2",
+        ]
+    )
+    assert args.rpc_url == DEFAULT_BASE_RPC_URL
 
 
 def test_from_without_to_is_an_error(capsys, monkeypatch):

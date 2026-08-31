@@ -161,7 +161,13 @@ def _build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--to-block", type=int, required=True)
     fetch.add_argument(
         "--rpc-url",
-        default=DEFAULT_BASE_RPC_URL,
+        # SUPPRESS, not a repeated default: argparse merges a subparser's
+        # results into the namespace the parent already filled, so repeating
+        # the default here would overwrite a --rpc-url the user typed BEFORE
+        # `fetch` - silently sending their traffic to the public endpoint
+        # instead of the node they asked for. SUPPRESS leaves the attribute
+        # alone when the flag is absent, so the parent's value survives.
+        default=argparse.SUPPRESS,
         help="JSON-RPC endpoint (override to use your own node)",
     )
 
