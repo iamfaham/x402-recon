@@ -144,6 +144,46 @@ def test_csv_amounts_are_exact_decimal_strings(tmp_path: Path):
     assert "0.500000" in amounts
 
 
+def test_csv_never_redacts_addresses_or_rounds_amounts(tmp_path: Path):
+    # The CSV is the accounting artifact and must never be shortened or
+    # rounded, unlike terminal output. A short "0xa"-style address can't
+    # distinguish a redacted column from an unredacted one (shorten_address
+    # is a no-op at <=16 chars), so this uses a full 42-character address and
+    # a genuinely sub-cent amount to make the assertions actually capable of
+    # catching a regression.
+    conn = connect(tmp_path / "full.db")
+    init_schema(conn)
+    address = "0x" + "ab" * 20
+    seed(
+        conn,
+        [
+            ("0x1", address, None, "2026-08-10T10:00:00Z", 145_971_653),
+            # A second payment from the same sender so the payer cascade's
+            # sender_match rule fires and produces an "agent:<address>"
+            # label instead of leaving the row uncategorized.
+            ("0x2", address, None, "2026-08-11T10:00:00Z", 1_000_000),
+        ],
+    )
+    run_categorize(conn)
+    out = tmp_path / "report.csv"
+
+    write_csv(conn, "2026-08-01", "2026-08-31", out)
+
+    rows = list(csv.DictReader(out.read_text().splitlines()))
+    assert len(rows) == 2
+    row = next(r for r in rows if r["tx_hash"] == "0x1")
+    assert row["sender_address"] == address, "the CSV must carry the full address"
+    assert "…" not in row["sender_address"]
+    assert row["payer_label"] == f"agent:{address}", (
+        "the payer label column must also carry the full address, not a "
+        "shortened one"
+    )
+    assert "…" not in row["payer_label"]
+    assert row["amount_usdc"] == "145.971653", (
+        "the CSV must keep exact sub-cent precision, not round to cents"
+    )
+
+
 def test_grand_total_reconciles_across_summary_breakdown_csv_and_ingest(
     tmp_path: Path,
 ):
