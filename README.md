@@ -83,7 +83,11 @@ this tool creates that the chain does not publish is the **association**:
 yours, and it should not leave your machine by accident.
 
 So terminal output shortens addresses by default (`0x6d6E695b…0B9192`). Pass
-`--full-addresses` when you want them whole.
+`--full-addresses` to see them whole — after the address on the one-command
+overview (`x402-recon 0xADDR --full-addresses --last 30d`), or after `report`
+on that command (`x402-recon report --full-addresses --from ... --to ...`).
+`customers` output never includes addresses, so there's nothing to restore
+there.
 
 CSV exports are the exception: they keep full addresses and transaction
 hashes, because that is the artifact you reconcile against a bank export or
