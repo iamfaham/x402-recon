@@ -299,7 +299,7 @@ def _run_overview_command(args: argparse.Namespace) -> int:
                 # that beats completeness; the inline detail above still shows
                 # what was dropped.
                 rejects_path = write_rejects(
-                    rejects, cache_dir() / f"rejects-{address}.json"
+                    rejects, cache_dir() / f"rejects-{address.lower()}.json"
                 )
                 print(f"\nFull list written to {rejects_path}")
         return 0

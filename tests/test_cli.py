@@ -410,6 +410,23 @@ def test_no_cache_writes_no_reject_file(monkeypatch, tmp_path, capsys):
     assert "rejects-" not in out, "no file path should be printed"
 
 
+def test_reject_filename_is_lowercased_like_the_cache_db(monkeypatch, tmp_path, capsys):
+    # cache_path() lowercases the address before building its filename, so two
+    # differently-cased spellings of the same address share one cache
+    # database. The reject file must follow the same convention so they also
+    # share one reject file.
+    mixed_case_address = "0x" + "Ab" * 20
+    _stub_overview_with_rejects(monkeypatch, tmp_path, rejects=[("0xabc", "bad")])
+    monkeypatch.setattr("x402_recon.cli.cache_dir", lambda: tmp_path)
+
+    main([mixed_case_address, "--last", "30d"])
+    out = capsys.readouterr().out
+
+    expected = tmp_path / f"rejects-{mixed_case_address.lower()}.json"
+    assert expected.exists(), f"expected lowercased reject filename, got output: {out}"
+    assert str(expected) in out
+
+
 def test_from_without_to_is_an_error(capsys, monkeypatch):
     monkeypatch.setattr("x402_recon.cli.RpcClient", lambda *a, **k: object())
     code = main(["0x" + "99" * 20, "--from", "2026-07-01"])
